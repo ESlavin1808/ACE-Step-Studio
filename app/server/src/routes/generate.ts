@@ -899,8 +899,8 @@ import('../services/pipeline-manager.js').then(({ pipelineManager }) => {
   pipelineManager.onRestart(() => {
     console.log('[Model] Pipeline restarted — resetting model state to defaults');
     activeLoadedModel = DEFAULT_MODEL;
-    activeLmModel = 'acestep-5Hz-lm-0.6B';
-    activeLmBackend = 'pt';
+    activeLmModel = process.env.INIT_LLM === 'false' ? '' : 'acestep-5Hz-lm-0.6B';
+    activeLmBackend = process.env.INIT_LLM === 'false' ? '' : 'pt';
     modelLoadingStatus = { state: 'idle', model: '' };
     generationInProgress = false;
   });
