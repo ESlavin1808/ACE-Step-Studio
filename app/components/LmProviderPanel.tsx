@@ -103,7 +103,7 @@ export const LmProviderPanel: React.FC = () => {
       {/* API Key */}
       <div>
         <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-          {(t as any)('lmProvider.apiKey') || 'OpenRouter API Key'}
+          {t('lmProvider.apiKey') || 'OpenRouter API Key'}
         </label>
         <div className="flex gap-1 mt-1">
           <div className="flex-1 relative">
@@ -130,7 +130,7 @@ export const LmProviderPanel: React.FC = () => {
             className="px-2 py-1 text-xs bg-pink-600 hover:bg-pink-700 disabled:bg-zinc-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed text-white rounded transition-colors flex items-center gap-1"
           >
             {testStatus === 'testing' && <Loader2 size={10} className="animate-spin" />}
-            {(t as any)('lmProvider.testKey') || 'Test'}
+            {t('lmProvider.testKey') || 'Test'}
           </button>
           {testStatus === 'ok' && <span className="text-green-500 text-xs px-1 self-center">✓</span>}
           {testStatus === 'fail' && (
@@ -145,7 +145,7 @@ export const LmProviderPanel: React.FC = () => {
       {/* Model picker */}
       <div ref={pickerRef}>
         <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-          {(t as any)('lmProvider.modelPicker.search') || 'Model'}
+          {t('lmProvider.modelPicker.search') || 'Model'}
         </label>
         <input
           value={modelPickerOpen ? modelQuery : cfg.model}
@@ -169,7 +169,7 @@ export const LmProviderPanel: React.FC = () => {
             {recentModels.length > 0 && (
               <>
                 <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-500 bg-zinc-50 dark:bg-zinc-800">
-                  {(t as any)('lmProvider.modelPicker.recentlyUsed') || 'Recently used'}
+                  {t('lmProvider.modelPicker.recentlyUsed') || 'Recently used'}
                 </div>
                 {recentModels.map(m => (
                   <button
@@ -217,7 +217,7 @@ export const LmProviderPanel: React.FC = () => {
 
       {/* Sliders */}
       <EditableSlider
-        label={(t as any)('lmProvider.temperature') || 'Temperature'}
+        label={t('lmProvider.temperature') || 'Temperature'}
         value={cfg.temperature}
         min={0}
         max={2}
@@ -226,7 +226,7 @@ export const LmProviderPanel: React.FC = () => {
         autoLabel=""
       />
       <EditableSlider
-        label={(t as any)('lmProvider.topP') || 'Top P'}
+        label={t('lmProvider.topP') || 'Top P'}
         value={cfg.topP}
         min={0}
         max={1}
@@ -235,7 +235,7 @@ export const LmProviderPanel: React.FC = () => {
         autoLabel=""
       />
       <EditableSlider
-        label={(t as any)('lmProvider.topK') || 'Top K'}
+        label={t('lmProvider.topK') || 'Top K'}
         value={cfg.topK}
         min={0}
         max={200}
@@ -244,7 +244,7 @@ export const LmProviderPanel: React.FC = () => {
         autoLabel="off"
       />
       <EditableSlider
-        label={(t as any)('lmProvider.minP') || 'Min P'}
+        label={t('lmProvider.minP') || 'Min P'}
         value={cfg.minP}
         min={0}
         max={1}
@@ -253,7 +253,7 @@ export const LmProviderPanel: React.FC = () => {
         autoLabel="off"
       />
       <EditableSlider
-        label={(t as any)('lmProvider.frequencyPenalty') || 'Frequency penalty'}
+        label={t('lmProvider.frequencyPenalty') || 'Frequency penalty'}
         value={cfg.frequencyPenalty}
         min={-2}
         max={2}
@@ -262,7 +262,7 @@ export const LmProviderPanel: React.FC = () => {
         autoLabel=""
       />
       <EditableSlider
-        label={(t as any)('lmProvider.presencePenalty') || 'Presence penalty'}
+        label={t('lmProvider.presencePenalty') || 'Presence penalty'}
         value={cfg.presencePenalty}
         min={-2}
         max={2}
@@ -271,7 +271,7 @@ export const LmProviderPanel: React.FC = () => {
         autoLabel=""
       />
       <EditableSlider
-        label={(t as any)('lmProvider.repetitionPenalty') || 'Repetition penalty'}
+        label={t('lmProvider.repetitionPenalty') || 'Repetition penalty'}
         value={cfg.repetitionPenalty}
         min={0}
         max={2}
@@ -283,7 +283,7 @@ export const LmProviderPanel: React.FC = () => {
       {/* Max tokens */}
       <div>
         <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-          {(t as any)('lmProvider.maxTokens') || 'Max tokens'}
+          {t('lmProvider.maxTokens') || 'Max tokens'}
         </label>
         <input
           type="number"
@@ -309,7 +309,7 @@ export const LmProviderPanel: React.FC = () => {
       {/* Seed */}
       <div>
         <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-          {(t as any)('lmProvider.seed') || 'Seed'}
+          {t('lmProvider.seed') || 'Seed'}
         </label>
         <input
           type="number"
@@ -339,7 +339,7 @@ export const LmProviderPanel: React.FC = () => {
           className="flex items-center gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"
         >
           {showSysPromptGen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          {(t as any)('lmProvider.systemPromptGenerate') || 'System prompt — Generate'}
+          {t('lmProvider.systemPromptGenerate') || 'System prompt — Generate'}
           {cfg.systemPromptGenerate && <span className="text-[10px] text-pink-500 ml-1">(custom)</span>}
         </button>
         {showSysPromptGen && (
@@ -379,7 +379,7 @@ export const LmProviderPanel: React.FC = () => {
           className="flex items-center gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"
         >
           {showSysPromptFmt ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          {(t as any)('lmProvider.systemPromptFormat') || 'System prompt — Format'}
+          {t('lmProvider.systemPromptFormat') || 'System prompt — Format'}
           {cfg.systemPromptFormat && <span className="text-[10px] text-pink-500 ml-1">(custom)</span>}
         </button>
         {showSysPromptFmt && (

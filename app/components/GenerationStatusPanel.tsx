@@ -1,8 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, Check, X, Copy, RefreshCw } from 'lucide-react';
-import type { GenStage } from '../services/llm/types';
+import type { GenStage, ErrorCode } from '../services/llm/types';
 import { useI18n } from '../context/I18nContext';
 import type { TranslationKey } from '../i18n/translations';
+
+/** Typed map from ErrorCode → TranslationKey so template-literal lookup stays type-safe. */
+const ERROR_KEYS: Record<ErrorCode, TranslationKey> = {
+  KEY_MISSING: 'aiGenerate.error.KEY_MISSING',
+  KEY_INVALID: 'aiGenerate.error.KEY_INVALID',
+  RATE_LIMITED: 'aiGenerate.error.RATE_LIMITED',
+  INSUFFICIENT_FUNDS: 'aiGenerate.error.INSUFFICIENT_FUNDS',
+  MODEL_UNAVAILABLE: 'aiGenerate.error.MODEL_UNAVAILABLE',
+  SCHEMA_UNSUPPORTED: 'aiGenerate.error.SCHEMA_UNSUPPORTED',
+  SCHEMA_NONCOMPLIANT: 'aiGenerate.error.SCHEMA_NONCOMPLIANT',
+  INVALID_JSON: 'aiGenerate.error.INVALID_JSON',
+  TIMEOUT: 'aiGenerate.error.TIMEOUT',
+  NETWORK: 'aiGenerate.error.NETWORK',
+  UNKNOWN: 'aiGenerate.error.UNKNOWN',
+};
 
 interface Props {
   state: GenStage;
@@ -54,13 +69,13 @@ export const GenerationStatusPanel: React.FC<Props> = ({ state, onCancel, onRetr
     return (
       <div className="flex items-center gap-2 p-2 bg-zinc-100 dark:bg-zinc-800/50 rounded-lg text-xs">
         <Loader2 size={14} className="animate-spin text-pink-500" />
-        <span>{t('aiGenerate.status.connecting' as TranslationKey) || 'Connecting to OpenRouter…'}</span>
+        <span>{t('aiGenerate.status.connecting') || 'Connecting to OpenRouter…'}</span>
         {elapsedSec && <span className="ml-2 text-zinc-500">{elapsedSec}s</span>}
         <button
           onClick={onCancel}
           className="ml-auto px-2 py-0.5 text-zinc-500 hover:text-red-500 transition-colors"
         >
-          {t('aiGenerate.cancel' as TranslationKey) || 'Cancel'}
+          {t('aiGenerate.cancel') || 'Cancel'}
         </button>
       </div>
     );
@@ -72,13 +87,13 @@ export const GenerationStatusPanel: React.FC<Props> = ({ state, onCancel, onRetr
       <div className="p-2 bg-zinc-100 dark:bg-zinc-800/50 rounded-lg text-xs space-y-2">
         <div className="flex items-center gap-2">
           <Loader2 size={14} className="animate-spin text-pink-500" />
-          <span>{t('aiGenerate.status.streaming' as TranslationKey) || 'Generating song…'}</span>
+          <span>{t('aiGenerate.status.streaming') || 'Generating song…'}</span>
           <span className="text-zinc-500">· {elapsedSec}s · {kb} KB</span>
           <button
             onClick={onCancel}
             className="ml-auto px-2 py-0.5 text-zinc-500 hover:text-red-500 transition-colors"
           >
-            {t('aiGenerate.cancel' as TranslationKey) || 'Cancel'}
+            {t('aiGenerate.cancel') || 'Cancel'}
           </button>
         </div>
         <div className="h-1 rounded-full bg-zinc-200 dark:bg-white/10 overflow-hidden">
@@ -86,7 +101,7 @@ export const GenerationStatusPanel: React.FC<Props> = ({ state, onCancel, onRetr
         </div>
         <details className="group">
           <summary className="cursor-pointer text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
-            {t('aiGenerate.preview.toggle' as TranslationKey) || 'Raw preview'}
+            {t('aiGenerate.preview.toggle') || 'Raw preview'}
           </summary>
           <pre className="mt-1 max-h-40 overflow-y-auto bg-black/40 text-zinc-300 p-2 rounded text-[10px] font-mono whitespace-pre-wrap break-all">
             {state.rawPreview || ''}
@@ -100,7 +115,7 @@ export const GenerationStatusPanel: React.FC<Props> = ({ state, onCancel, onRetr
     return (
       <div className="flex items-center gap-2 p-2 bg-zinc-100 dark:bg-zinc-800/50 rounded-lg text-xs">
         <Loader2 size={14} className="animate-spin text-pink-500" />
-        <span>{t('aiGenerate.status.parsing' as TranslationKey) || 'Validating response…'}</span>
+        <span>{t('aiGenerate.status.parsing') || 'Validating response…'}</span>
       </div>
     );
   }
@@ -114,7 +129,7 @@ export const GenerationStatusPanel: React.FC<Props> = ({ state, onCancel, onRetr
       <div className="flex items-center gap-2 p-2 bg-green-50 dark:bg-green-900/30 rounded-lg text-xs border border-green-200 dark:border-green-800">
         <Check size={14} className="text-green-600 dark:text-green-400" />
         <span className="text-green-700 dark:text-green-300">
-          {t('aiGenerate.status.success' as TranslationKey) || 'Done'} · {t('aiGenerate.usage.tokens' as TranslationKey) || 'Tokens'}: {u.promptTokens} in / {u.completionTokens} out{costStr}
+          {t('aiGenerate.status.success') || 'Done'} · {t('aiGenerate.usage.tokens') || 'Tokens'}: {u.promptTokens} in / {u.completionTokens} out{costStr}
         </span>
       </div>
     );
@@ -124,7 +139,7 @@ export const GenerationStatusPanel: React.FC<Props> = ({ state, onCancel, onRetr
     return (
       <div className="flex items-center gap-2 p-2 bg-zinc-100 dark:bg-zinc-800/50 rounded-lg text-xs">
         <X size={14} className="text-zinc-500" />
-        <span>{t('aiGenerate.status.cancelled' as TranslationKey) || 'Cancelled'}</span>
+        <span>{t('aiGenerate.status.cancelled') || 'Cancelled'}</span>
       </div>
     );
   }
@@ -134,7 +149,7 @@ export const GenerationStatusPanel: React.FC<Props> = ({ state, onCancel, onRetr
       const payload = `OpenRouter error\ncode: ${state.code}\nmessage: ${state.message}\nfinishedAt: ${new Date(state.finishedAt).toISOString()}`;
       try { navigator.clipboard.writeText(payload); } catch { /* no-op */ }
     };
-    const errorMessage = t(`aiGenerate.error.${state.code}` as TranslationKey) || state.message || 'Generation failed';
+    const errorMessage = t(ERROR_KEYS[state.code]) || state.message || 'Generation failed';
     return (
       <div className="p-2 bg-red-50 dark:bg-red-900/30 rounded-lg text-xs space-y-1.5 border border-red-200 dark:border-red-800">
         <div className="flex items-start gap-2">
@@ -151,13 +166,13 @@ export const GenerationStatusPanel: React.FC<Props> = ({ state, onCancel, onRetr
             onClick={onRetry}
             className="flex items-center gap-1 px-2 py-0.5 bg-zinc-200 dark:bg-white/10 text-zinc-700 dark:text-zinc-200 rounded text-[10px] hover:bg-zinc-300 dark:hover:bg-white/20 transition-colors"
           >
-            <RefreshCw size={10} /> {t('aiGenerate.retry' as TranslationKey) || 'Retry'}
+            <RefreshCw size={10} /> {t('aiGenerate.retry') || 'Retry'}
           </button>
           <button
             onClick={copyDetails}
             className="flex items-center gap-1 px-2 py-0.5 bg-zinc-200 dark:bg-white/10 text-zinc-700 dark:text-zinc-200 rounded text-[10px] hover:bg-zinc-300 dark:hover:bg-white/20 transition-colors"
           >
-            <Copy size={10} /> {t('aiGenerate.copyDetails' as TranslationKey) || 'Copy details'}
+            <Copy size={10} /> {t('aiGenerate.copyDetails') || 'Copy details'}
           </button>
         </div>
       </div>
