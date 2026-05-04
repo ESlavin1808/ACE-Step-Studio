@@ -1,21 +1,19 @@
-import { OpenRouterClient } from './openrouterClient';
+import { OpenRouter } from '@openrouter/sdk';
 import { llmStorage } from './storage';
 import { buildGenerate, buildFormat, type ChatMessage } from './prompts';
 import { extractPartial } from './partialJson';
 import {
   OpenRouterError,
+  type ErrorCode,
   type SongDraft,
   type SongDraftInput,
   type FormatInput,
   type GenEvent,
 } from './types';
 
-// OpenAI strict json_schema mode (and providers like Azure-routed Anthropic
-// behind OpenRouter) disallow validators beyond the structural set:
-// type / properties / required / additionalProperties / enum / items / $ref.
-// Numeric min/max and array minItems/maxItems trigger
-// `output_config.format.schema: ... not supported`. The prompt enforces
-// the value ranges (BPM 40-220, durationSec 15-600, tags 3-6) instead.
+// Strict json_schema for capable models. Validators that strict mode disallows
+// (minItems/maxItems on arrays, minimum/maximum on integers) are NOT here —
+// the prompt enforces ranges (BPM 40-220, durationSec 15-600, tags 3-6).
 const SCHEMA = {
   name: 'SongDraft',
   strict: true,
@@ -37,57 +35,144 @@ const SCHEMA = {
 } as const;
 
 const REQUIRED_FIELDS = SCHEMA.schema.required;
-
 const SANITY_CHECK_THRESHOLD = 200;
+
+const PROJECT_HEADERS = {
+  httpReferer: 'https://github.com/timoncool/ACE-Step-Studio',
+  appTitle: 'ACE-Step Studio',
+} as const;
 
 export interface RunOpts {
   signal: AbortSignal;
   onEvent: (e: GenEvent) => void;
 }
 
+// In-memory cache for /models response (keyed by api key) — saves a roundtrip
+// when the user fires multiple generations in a session.
+const modelsCache = new Map<string, { fetchedAt: number; data: any[] }>();
+const MODELS_TTL_MS = 60 * 60 * 1000;
+
+function mapErrorToCode(err: any): ErrorCode {
+  const status = err?.status ?? err?.response?.status ?? null;
+  if (err?.name === 'AbortError') return 'NETWORK';
+  if (status === 401) return 'KEY_INVALID';
+  if (status === 402) return 'INSUFFICIENT_FUNDS';
+  if (status === 429) return 'RATE_LIMITED';
+  if (status === 404 || status === 503) return 'MODEL_UNAVAILABLE';
+  if (status === 400) return 'SCHEMA_UNSUPPORTED';
+  if (typeof status === 'number') return 'UNKNOWN';
+  return 'NETWORK';
+}
+
+function makeClient(apiKey: string): OpenRouter {
+  return new OpenRouter({
+    apiKey,
+    httpReferer: PROJECT_HEADERS.httpReferer,
+    appTitle: PROJECT_HEADERS.appTitle,
+  } as any);
+}
+
+async function listModels(client: OpenRouter, apiKey: string, force = false): Promise<any[]> {
+  const cached = modelsCache.get(apiKey);
+  if (!force && cached && Date.now() - cached.fetchedAt < MODELS_TTL_MS) return cached.data;
+  // SDK exposes models.list — name varies across versions. Try both shapes.
+  const anyClient = client as any;
+  try {
+    let res: any;
+    if (anyClient.models?.list) res = await anyClient.models.list();
+    else if (anyClient.models?.listAvailableModels) res = await anyClient.models.listAvailableModels();
+    else throw new Error('models.list not on SDK client');
+    const data = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+    modelsCache.set(apiKey, { fetchedAt: Date.now(), data });
+    return data;
+  } catch (e) {
+    // Fallback: hit /models directly (SDK may not expose it in browser builds)
+    const r = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': PROJECT_HEADERS.httpReferer,
+        'X-Title': PROJECT_HEADERS.appTitle,
+      },
+    });
+    if (!r.ok) throw new OpenRouterError(mapErrorToCode({ status: r.status }), `models list ${r.status}`);
+    const json = await r.json();
+    const data = Array.isArray(json?.data) ? json.data : [];
+    modelsCache.set(apiKey, { fetchedAt: Date.now(), data });
+    return data;
+  }
+}
+
+export async function refreshModelList(apiKey: string): Promise<any[]> {
+  if (!apiKey) return [];
+  return listModels(makeClient(apiKey), apiKey, true);
+}
+
+export async function getModelList(apiKey: string): Promise<any[]> {
+  if (!apiKey) return [];
+  return listModels(makeClient(apiKey), apiKey, false);
+}
+
+export async function testApiKey(apiKey: string, model = 'openrouter/auto'): Promise<{ ok: true }> {
+  const client = makeClient(apiKey);
+  try {
+    const res = await (client.chat as any).send({
+      model,
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 1,
+    });
+    void res;
+    return { ok: true };
+  } catch (e) {
+    throw new OpenRouterError(mapErrorToCode(e), `key test failed: ${(e as any)?.message || e}`);
+  }
+}
+
+// Strip markdown ```json ... ``` fences some models add even when asked for JSON.
+function stripCodeFence(s: string): string {
+  const t = s.trimStart();
+  if (!t.startsWith('```')) return s;
+  const m = t.match(/^```(?:json)?\s*\n?/i);
+  if (!m) return s;
+  let inner = t.slice(m[0].length);
+  const closeIdx = inner.lastIndexOf('```');
+  if (closeIdx >= 0) inner = inner.slice(0, closeIdx);
+  return inner.trim();
+}
+
 export class OpenRouterProvider {
   generate(input: SongDraftInput, opts: RunOpts): Promise<SongDraft> {
     const cfg = llmStorage.getOpenRouter();
     const messages = buildGenerate(input, cfg.systemPromptGenerate);
-    return this.runStreamed(messages, opts, 0, { thinking: !!input.thinking });
+    return this.run(messages, opts, 0, { thinking: !!input.thinking });
   }
 
   format(input: FormatInput, opts: RunOpts): Promise<SongDraft> {
     const cfg = llmStorage.getOpenRouter();
     const messages = buildFormat(input, cfg.systemPromptFormat);
-    return this.runStreamed(messages, opts, 0, { thinking: !!input.thinking });
+    return this.run(messages, opts, 0, { thinking: !!input.thinking });
   }
 
-  private async runStreamed(
+  private async run(
     messages: ChatMessage[],
     opts: RunOpts,
-    attempt: number = 0,
-    extra: { thinking: boolean } = { thinking: false },
+    attempt: number,
+    extra: { thinking: boolean },
   ): Promise<SongDraft> {
     const cfg = llmStorage.getOpenRouter();
-    if (!cfg.apiKey) {
-      throw new OpenRouterError('KEY_MISSING', 'OpenRouter API key not set');
-    }
-    if (!cfg.model) {
-      throw new OpenRouterError('MODEL_UNAVAILABLE', 'OpenRouter model not selected — pick one from the list');
-    }
-    const client = new OpenRouterClient(cfg.apiKey);
+    if (!cfg.apiKey) throw new OpenRouterError('KEY_MISSING', 'OpenRouter API key not set');
+    if (!cfg.model) throw new OpenRouterError('MODEL_UNAVAILABLE', 'OpenRouter model not selected — pick one from the list');
 
-    // Adaptive request body: only forward parameters the chosen model declares
-    // support for in its OpenRouter `supported_parameters` field. Some providers
-    // (e.g. Anthropic via Azure) hard-reject unknown params; others silently
-    // ignore them. Looking up the live capability list per model avoids
-    // surprises and lets us support any model on OpenRouter without manual
-    // knowledge of its constraints.
+    const client = makeClient(cfg.apiKey);
+
+    // Adaptive request body: only forward params the chosen model declares
+    // support for in its OpenRouter `supported_parameters` field.
     let supported: Set<string>;
     try {
-      const models = await client.listModels();
-      const meta = models.find((m) => m && m.id === cfg.model);
+      const models = await listModels(client, cfg.apiKey);
+      const meta = models.find((m: any) => m && m.id === cfg.model);
       const list = Array.isArray(meta?.supported_parameters) ? meta.supported_parameters : [];
       supported = new Set<string>(list);
     } catch {
-      // If model metadata can't be fetched, fall back to the broadly-supported
-      // baseline (OpenAI-compatible core).
       supported = new Set<string>(['temperature', 'top_p', 'max_tokens', 'response_format', 'stream']);
     }
 
@@ -99,7 +184,6 @@ export class OpenRouterProvider {
     const setIf = (param: string, value: unknown): void => {
       if (supported.has(param)) reqBody[param] = value;
     };
-
     setIf('temperature', cfg.temperature);
     setIf('top_p', cfg.topP);
     setIf('frequency_penalty', cfg.frequencyPenalty);
@@ -109,11 +193,8 @@ export class OpenRouterProvider {
     if (cfg.topK > 0) setIf('top_k', cfg.topK);
     if (cfg.minP > 0) setIf('min_p', cfg.minP);
     if (cfg.seed !== null) setIf('seed', cfg.seed);
-    // Reasoning hint (honored by Claude extended-thinking, GPT-5, DeepSeek-R1)
     if (extra.thinking) setIf('reasoning', { effort: 'medium' });
 
-    // Pick the strongest JSON shape this model supports.
-    // attempt=0 → try the strongest available; attempt>=1 → step down.
     const hasStructured = supported.has('structured_outputs');
     const hasResponseFormat = supported.has('response_format');
     if (attempt === 0 && hasStructured) {
@@ -121,97 +202,82 @@ export class OpenRouterProvider {
     } else if (hasResponseFormat) {
       reqBody.response_format = { type: 'json_object' };
     }
-    // else: no response_format — rely on the system prompt's explicit JSON
-    // contract and our tolerant code-fence-aware parser.
 
-    let res: Response;
-    try {
-      res = await client.chatCompletion(reqBody as any, opts.signal);
-    } catch (e) {
-      if (e instanceof OpenRouterError && e.code === 'SCHEMA_UNSUPPORTED' && attempt === 0) {
-        const fallbackMessages: ChatMessage[] = [
-          ...messages,
-          {
-            role: 'user',
-            content: `Match this exact JSON shape:\n${JSON.stringify(SCHEMA.schema)}`,
-          },
-        ];
-        return this.runStreamed(fallbackMessages, opts, 1, extra);
+    // SDK signature differs slightly between versions — try both common shapes.
+    const callSDK = async () => {
+      const c: any = client.chat;
+      try {
+        return await c.send({ ...reqBody, signal: opts.signal });
+      } catch {
+        return await c.send({ chatRequest: reqBody, signal: opts.signal });
       }
-      throw e;
+    };
+
+    let stream: any;
+    try {
+      stream = await callSDK();
+    } catch (e: any) {
+      const code = mapErrorToCode(e);
+      if (code === 'SCHEMA_UNSUPPORTED' && attempt === 0) {
+        const fallback: ChatMessage[] = [
+          ...messages,
+          { role: 'user', content: `Match this exact JSON shape:\n${JSON.stringify(SCHEMA.schema)}` },
+        ];
+        return this.run(fallback, opts, 1, extra);
+      }
+      throw new OpenRouterError(code, String(e?.message || e), e);
     }
 
     let firstChunkSeen = false;
     let raw = '';
     let usageEmitted = false;
 
-    // Strip markdown code fences (```json ... ``` / ``` ... ```) that some
-    // models add even when asked for JSON only.
-    const stripCodeFence = (s: string): string => {
-      const t = s.trimStart();
-      if (!t.startsWith('```')) return s;
-      const m = t.match(/^```(?:json)?\s*\n?/i);
-      if (!m) return s;
-      let inner = t.slice(m[0].length);
-      const closeIdx = inner.lastIndexOf('```');
-      if (closeIdx >= 0) inner = inner.slice(0, closeIdx);
-      return inner.trim();
-    };
-
-    for await (const sseChunk of client.streamSse(res)) {
-      if (!firstChunkSeen) {
-        firstChunkSeen = true;
-        opts.onEvent({ type: 'firstChunk' });
-      }
-
-      let parsed: any;
-      try {
-        parsed = JSON.parse(sseChunk);
-      } catch {
-        continue;
-      }
-
-      const delta: string = parsed?.choices?.[0]?.delta?.content || '';
-      if (delta) raw += delta;
-
-      if (parsed?.usage && !usageEmitted) {
-        usageEmitted = true;
-        const u = parsed.usage;
-        opts.onEvent({
-          type: 'usage',
-          promptTokens: u.prompt_tokens || 0,
-          completionTokens: u.completion_tokens || 0,
-          costUsd: typeof u.cost === 'number' ? u.cost : null,
-        });
-      }
-
-      // Compute "view" — raw with leading code fence stripped — so the sanity
-      // check + partial parser see clean JSON even when the model wraps the
-      // payload in ```json ... ```.
-      const view = stripCodeFence(raw);
-
-      // Mid-stream sanity check (against stripped view)
-      if (view.length >= SANITY_CHECK_THRESHOLD && !view.trimStart().startsWith('{')) {
-        if (attempt === 0) {
-          const fallbackMessages: ChatMessage[] = [
-            ...messages,
-            { role: 'user', content: 'Return JSON only, matching the schema, no prose, no markdown fences.' },
-          ];
-          return this.runStreamed(fallbackMessages, opts, 1, extra);
+    try {
+      for await (const chunk of stream as AsyncIterable<any>) {
+        if (opts.signal.aborted) {
+          throw Object.assign(new Error('aborted'), { name: 'AbortError' });
         }
-        throw new OpenRouterError('SCHEMA_NONCOMPLIANT', 'model returned non-JSON content');
-      }
+        if (!firstChunkSeen) {
+          firstChunkSeen = true;
+          opts.onEvent({ type: 'firstChunk' });
+        }
 
-      const partResult = extractPartial(view);
-      const ev: GenEvent = {
-        type: 'chunk',
-        raw,
-        partial: partResult.closed,
-      };
-      if (partResult.openStringField) {
-        (ev as any).openStringField = partResult.openStringField;
+        const delta: string = chunk?.choices?.[0]?.delta?.content || '';
+        if (delta) raw += delta;
+
+        const usage = chunk?.usage;
+        if (usage && !usageEmitted) {
+          usageEmitted = true;
+          opts.onEvent({
+            type: 'usage',
+            promptTokens: usage.prompt_tokens || usage.promptTokens || 0,
+            completionTokens: usage.completion_tokens || usage.completionTokens || 0,
+            costUsd: typeof usage.cost === 'number' ? usage.cost : null,
+          });
+        }
+
+        const view = stripCodeFence(raw);
+
+        if (view.length >= SANITY_CHECK_THRESHOLD && !view.trimStart().startsWith('{')) {
+          if (attempt === 0) {
+            const fallback: ChatMessage[] = [
+              ...messages,
+              { role: 'user', content: 'Return JSON only, matching the schema, no prose, no markdown fences.' },
+            ];
+            return this.run(fallback, opts, 1, extra);
+          }
+          throw new OpenRouterError('SCHEMA_NONCOMPLIANT', 'model returned non-JSON content');
+        }
+
+        const partResult = extractPartial(view);
+        const ev: GenEvent = { type: 'chunk', raw, partial: partResult.closed };
+        if (partResult.openStringField) (ev as any).openStringField = partResult.openStringField;
+        opts.onEvent(ev);
       }
-      opts.onEvent(ev);
+    } catch (e: any) {
+      if (opts.signal.aborted || e?.name === 'AbortError') throw e;
+      if (e instanceof OpenRouterError) throw e;
+      throw new OpenRouterError(mapErrorToCode(e), String(e?.message || e), e);
     }
 
     opts.onEvent({ type: 'streamDone', raw });
@@ -221,24 +287,23 @@ export class OpenRouterProvider {
       draft = JSON.parse(stripCodeFence(raw));
     } catch {
       if (attempt === 0) {
-        const fallbackMessages: ChatMessage[] = [
+        const fallback: ChatMessage[] = [
           ...messages,
           { role: 'user', content: 'Return JSON only, no prose, no markdown fences.' },
         ];
-        return this.runStreamed(fallbackMessages, opts, 1, extra);
+        return this.run(fallback, opts, 1, extra);
       }
       throw new OpenRouterError('INVALID_JSON', 'failed to parse model response after retry');
     }
 
-    // Validate required fields
     for (const field of REQUIRED_FIELDS) {
       if (!(field in draft)) {
         if (attempt === 0) {
-          const fallbackMessages: ChatMessage[] = [
+          const fallback: ChatMessage[] = [
             ...messages,
             { role: 'user', content: 'Return JSON only, no prose. Include all required fields.' },
           ];
-          return this.runStreamed(fallbackMessages, opts, 1, extra);
+          return this.run(fallback, opts, 1, extra);
         }
         throw new OpenRouterError('INVALID_JSON', `missing field: ${field}`);
       }

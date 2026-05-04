@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Eye, EyeOff, ChevronDown, ChevronRight, RotateCcw, Loader2, RefreshCw } from 'lucide-react';
 import { llmStorage, DEFAULT_OR_CONFIG } from '../services/llm/storage';
-import { OpenRouterClient } from '../services/llm/openrouterClient';
+import { getModelList, refreshModelList, testApiKey } from '../services/llm/openrouter';
 import { DEFAULT_GENERATE_PROMPT, DEFAULT_FORMAT_PROMPT } from '../services/llm/prompts';
 import { EditableSlider } from './EditableSlider';
 import { useI18n } from '../context/I18nContext';
@@ -28,8 +28,7 @@ export const LmProviderPanel: React.FC = () => {
   const reloadModels = (force = false) => {
     if (!cfg.apiKey) { setModels([]); return; }
     setModelsLoading(true);
-    new OpenRouterClient(cfg.apiKey)
-      .listModels(force)
+    (force ? refreshModelList(cfg.apiKey) : getModelList(cfg.apiKey))
       .then(setModels)
       .catch(() => setModels([]))
       .finally(() => setModelsLoading(false));
@@ -76,7 +75,7 @@ export const LmProviderPanel: React.FC = () => {
     setTestStatus('testing');
     setTestError('');
     try {
-      await new OpenRouterClient(cfg.apiKey).testKey(cfg.apiKey, cfg.model || undefined);
+      await testApiKey(cfg.apiKey, cfg.model || undefined);
       setTestStatus('ok');
     } catch (e: any) {
       setTestStatus('fail');
