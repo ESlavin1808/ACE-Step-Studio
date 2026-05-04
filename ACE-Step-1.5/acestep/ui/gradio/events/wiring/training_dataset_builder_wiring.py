@@ -85,6 +85,7 @@ def register_training_dataset_builder_handlers(context: TrainingWiringContext) -
             training_section["label_progress"],
             training_section["dataset_builder_state"],
         ],
+        api_name="auto_label_all",  # Express calls via @gradio/client by this name
     ).then(
         fn=train_h.get_sample_preview,
         inputs=[

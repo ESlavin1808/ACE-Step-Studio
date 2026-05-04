@@ -1217,17 +1217,21 @@ router.get('/models', async (_req, res: Response) => {
   }
 });
 
-// GET /api/generate/random-description — Load a random simple description from Gradio
+// GET /api/generate/random-description — random sample (upstream renamed → /create_random_sample HTTP)
 router.get('/random-description', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
   try {
-    const client = await getGradioClient();
-    const result = await client.predict('/load_random_simple_description', []);
-    const data = result.data as unknown[];
-    // Returns [description, instrumental, vocal_language]
+    const r = await fetch(`${config.acestep.apiUrl}/create_random_sample`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sample_type: 'simple_mode' }),
+    });
+    if (!r.ok) throw new Error(`/create_random_sample HTTP ${r.status}`);
+    const wrapped: any = await r.json();
+    const data = wrapped?.data ?? wrapped ?? {};
     res.json({
-      description: data[0] || '',
-      instrumental: data[1] || false,
-      vocalLanguage: data[2] || 'unknown',
+      description: data.prompt || data.description || data.caption || '',
+      instrumental: data.instrumental ?? false,
+      vocalLanguage: data.vocal_language || data.vocalLanguage || 'unknown',
     });
   } catch (error) {
     console.error('Random description error:', error);
@@ -1311,54 +1315,50 @@ router.get('/debug/:taskId', authMiddleware, async (req: AuthenticatedRequest, r
   }
 });
 
-// Create Sample endpoint - LLM generates caption/lyrics/metadata from description (Simple Mode)
+// Create Sample endpoint - LLM generates caption/lyrics/metadata from description (Simple Mode).
+// Calls our custom /v1/create_sample_from_query (inspiration path) — runs the LLM directly
+// on the description to AUTO-GENERATE lyrics. Do NOT use upstream /format_input here:
+// that endpoint requires user-provided lyrics and forces "[Instrumental]" if they're empty.
 router.post('/create-sample', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { query, instrumental, vocalLanguage, lmTemperature, lmTopK, lmTopP } = req.body;
+    const { query, instrumental, vocalLanguage, lmTemperature } = req.body;
 
     if (!query) {
       res.status(400).json({ error: 'query (song description) is required' });
       return;
     }
 
-    const { getGradioClient } = await import('../services/gradio-client.js');
-    const client = await getGradioClient();
-
-    // CreateSample request
-    const result = await client.predict('/create_sample', [
-      query,
-      instrumental ?? false,
-      vocalLanguage || 'en',
-      lmTemperature ?? 0.85,
-      lmTopK ?? 0,
-      lmTopP ?? 0.9,
-      false, // constrained_decoding_debug
-    ]);
-
-    const data = result.data as any[];
-    // Returns 15 values: caption, lyrics, bpm, duration, keyscale, language, language2,
-    // timesignature, instrumental, btn_interactive, sample_created, think, is_format_caption, status, mode
-    if (!Array.isArray(data) || data.length < 8) {
-      res.status(500).json({ error: 'Unexpected response from create_sample' });
-      return;
+    const r = await fetch(`${config.acestep.apiUrl}/v1/create_sample_from_query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        instrumental: instrumental ?? false,
+        vocal_language: vocalLanguage || null,
+        temperature: lmTemperature ?? 0.85,
+      }),
+    });
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      throw new Error(`/v1/create_sample_from_query HTTP ${r.status}: ${text.slice(0, 200)}`);
     }
+    const wrapped: any = await r.json();
+    if (wrapped?.code && wrapped.code !== 200 && wrapped?.error) {
+      throw new Error(wrapped.error);
+    }
+    const data = wrapped?.data ?? wrapped ?? {};
 
-    // Gradio returns either plain values or {__type__: "update", value: ...} objects
-    const unwrap = (v: any): any => (v && typeof v === 'object' && '__type__' in v) ? v.value : v;
-
-    const outCaption = unwrap(data[0]) || '';
-    const outLyrics = unwrap(data[1]) || '';
-    const outBpm = unwrap(data[2]) || 0;
-    const outDuration = unwrap(data[3]) || -1;
-    const outKeyScale = unwrap(data[4]) || '';
-    const outVocalLang = unwrap(data[5]) || 'en';
-    const outTimeSig = unwrap(data[7]) || '';
-    const outInstrumental = unwrap(data[8]) ?? false;
-    const outStatus = unwrap(data[13]) || 'Sample created';
-
-    // CreateSample response ready
-
-    res.json({ caption: outCaption, lyrics: outLyrics, bpm: outBpm, duration: outDuration, keyScale: outKeyScale, vocalLanguage: outVocalLang, timeSignature: outTimeSig, instrumental: outInstrumental, status: outStatus });
+    res.json({
+      caption: data.caption || '',
+      lyrics: data.lyrics || '',
+      bpm: data.bpm || 0,
+      duration: data.duration || -1,
+      keyScale: data.key_scale || '',
+      vocalLanguage: data.vocal_language || vocalLanguage || 'en',
+      timeSignature: data.time_signature || '',
+      instrumental: data.instrumental ?? instrumental ?? false,
+      status: 'Sample created',
+    });
   } catch (error) {
     console.error('[CreateSample] Error:', error);
     res.status(500).json({ error: (error as Error).message });
@@ -1384,50 +1384,41 @@ router.post('/format', authMiddleware, async (req: AuthenticatedRequest, res: Re
     if (keyScale) paramObj.key = keyScale;
     if (timeSignature) paramObj.time_signature = timeSignature;
 
-    // Call Gradio format endpoints
-    // Named Gradio endpoints: /format_caption, /format_lyrics
+    // Call FastAPI /format_input (upstream replaced Gradio /format_caption + /format_lyrics
+    // with a single endpoint that returns caption + lyrics + metadata in one call).
     try {
-      const { getGradioClient } = await import('../services/gradio-client.js');
-      const client = await getGradioClient();
-      const gradioArgs = [
-        caption,
-        lyrics || '',
-        (bpm && bpm > 0) ? bpm : 0,
-        (duration && duration > 0) ? duration : -1,
-        keyScale || '',
-        timeSignature || '',
-        temperature ?? 0.85,
-        topK ?? 0,
-        topP ?? 0.9,
-        false,
-      ];
-
-      // Format caption via named endpoint
-      console.log('[Format] Calling Gradio /format_caption...');
-      const captionResult = await client.predict('/format_caption', gradioArgs);
-      const cd = captionResult.data as any[];
-
-      // Format lyrics via named endpoint if lyrics provided
-      let formattedLyrics = lyrics || '';
-      if (lyrics && lyrics.trim()) {
-        console.log('[Format] Calling Gradio /format_lyrics...');
-        const lyricsResult = await client.predict('/format_lyrics', gradioArgs);
-        const ld = lyricsResult.data as any[];
-        formattedLyrics = ld[0] || lyrics;
+      console.log('[Format] Calling /format_input...');
+      const r = await fetch(`${ACESTEP_API_URL}/format_input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: caption || '',
+          lyrics: lyrics || '',
+          temperature: temperature ?? 0.85,
+        }),
+      });
+      if (!r.ok) {
+        const text = await r.text().catch(() => '');
+        throw new Error(`/format_input HTTP ${r.status}: ${text.slice(0, 200)}`);
       }
+      const wrapped: any = await r.json();
+      if (wrapped?.code && wrapped.code !== 200 && wrapped?.error) {
+        throw new Error(wrapped.error);
+      }
+      const d = wrapped?.data ?? wrapped ?? {};
 
       res.json({
-        caption: cd[0],
-        lyrics: formattedLyrics,
-        bpm: cd[1],
-        duration: cd[2],
-        key_scale: cd[3],
-        vocal_language: cd[4],
-        time_signature: cd[5],
+        caption: d.caption || caption,
+        lyrics: d.lyrics || lyrics || '',
+        bpm: d.bpm || (bpm ?? 0),
+        duration: d.duration || (duration ?? -1),
+        key_scale: d.key_scale || keyScale || '',
+        vocal_language: d.vocal_language || vocalLanguage || 'unknown',
+        time_signature: d.time_signature || timeSignature || '',
       });
       return;
     } catch (gradioErr: any) {
-      console.error('[Format] Gradio format failed:', gradioErr?.message);
+      console.error('[Format] /format_input failed, falling back to python spawn:', gradioErr?.message);
     }
 
     // Fallback: Python spawn (only reached when Gradio is unreachable)

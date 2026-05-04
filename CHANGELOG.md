@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-05-04
+
+### Added
+- **DCW (Differential Correction in Wavelet domain)** — CVPR 2026 paper, training-free quality boost on every sampler step. Default ON. New panel in Custom mode: Mode (low/high/double/pix) + Wavelet (haar/db4/sym4/sym8/...) + 2 strength sliders
+- **Retake** — variation seed with Variance slider (variance-preserving blend with independent noise draw)
+- **Flow-edit** (#1156) — text-edit overlay backend on cover/text2music tasks (UI TBD)
+- **ScragVAE** — alternative community VAE swap via `ACESTEP_VAE_CHECKPOINT` env var
+- **MLX DCW** — DCW correction for Apple Silicon path (haar native, other bases via fallback)
+- **`use_legacy_cfg_prompt`** A/B toggle for old vs training-aligned LM CFG prompt format
+
+### Fixed
+- **`infer_steps` on turbo / xl-turbo** — was silently clamped to 8 steps, now respects UI value (1–20)
+- **LM CFG uncond prompt** aligned with training dropout format (#1127, #1128) — better lyrics quality, missing `\n\n` after `</think>` restored
+- **MLX DiT static buffers** materialized before worker use on Apple Silicon (#1166)
+- **`GenerationParams` None handling** — no longer crashes on `None` numeric fields (#1027)
+- **Handler kwargs** no longer silently swallowed on base/turbo/xl-turbo paths
+- **Express → Gradio**: `/create_sample` (Gradio) → `/v1/create_sample_from_query` (our HTTP) — Magic Wand now generates real lyrics from description (was always returning `[Instrumental]`)
+- **Express → Gradio**: `/format_caption` + `/format_lyrics` (removed) → `/format_input` (single FastAPI endpoint)
+- **Express → Gradio**: `/load_random_simple_description` (removed) → `/create_random_sample` (FastAPI)
+- **`/auto_label_all` and `/init_service_wrapper`** — restored as named Gradio endpoints (was lost to `/lambda_N` after lambda wrapping)
+- **`api_routes._get_project_root`** — fixed walking 5 levels up instead of 3 (was returning `acestep/ui` instead of project root, breaking random sample examples)
+- **`unhandledRejection` global handler** in Express — `@gradio/client` no longer crashes Node when stream closes after error
+
+### Changed
+- **Synced with upstream ACE-Step v0.1.7** + post-release fixes (May 1, 2026) — 72 upstream commits merged across 148 files
+- **`scheduler_type`** propagated end-to-end through wiring → batch_management → progress → GenerationParams → inference → handler → service_generate → model (was disconnected after merge, now fully wired)
+- **`pytorch-wavelets >= 1.3.0`** + **`pywavelets >= 1.9.0`** — added to `install.bat` and Pinokio launcher (required for DCW)
+
 ## 2026-04-23
 
 ### Added

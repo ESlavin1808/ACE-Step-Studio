@@ -135,10 +135,24 @@ class GenerationParams:
     cfg_interval_end: float = 1.0
     shift: float = 1.0
     infer_method: str = "ode"  # "ode" or "sde" - diffusion inference method
-    sampler_mode: str = "euler"  # "euler", "heun", "midpoint", "rk4", "bogacki", "dopri5", "a2s", "pingpong", "deis", "ipndm"
-    scheduler_type: str = "linear"  # "linear", "karras", "cosine", "beta", "sway", "logit_normal", "laplace"
+    sampler_mode: str = "euler"  # "euler" (first-order) or "heun" (second-order predictor-corrector)
+    # Scheduler type — timestep distribution strategy for DiT denoising loop.
+    # 7 schedulers supported: linear (default), karras, cosine, beta, sway, logit_normal, laplace.
+    scheduler_type: str = "linear"
     velocity_norm_threshold: float = 0.0  # Clamp velocity prediction norms (0 = disabled, try 2.0)
     velocity_ema_factor: float = 0.0  # Velocity EMA smoothing (0 = disabled, try 0.1)
+    # DCW — Differential Correction in Wavelet domain (CVPR 2026, arXiv:2604.16044).
+    # On by default to mitigate SNR-t bias via per-band wavelet-domain correction
+    # at each sampler step.  Uses `pytorch_wavelets` + `PyWavelets` (managed deps).
+    dcw_enabled: bool = True
+    # Defaults tuned by grid search on the pure-DiT path; "double" with
+    # low_scaler=0.05 and high_scaler=0.02 was the top configuration.  In
+    # LLM-think mode DCW's gain is small and these defaults still sit near
+    # the think-mode optimum band, so we keep a single global default.
+    dcw_mode: str = "double"        # "low" | "high" | "double" | "pix"
+    dcw_scaler: float = 0.05        # low-band scaler (or single scaler for "high"/"pix")
+    dcw_high_scaler: float = 0.02   # high-band scaler (used only in "double" mode)
+    dcw_wavelet: str = "haar"       # PyWavelets basis, e.g. "haar", "db4", "sym8"
     # Custom timesteps (parsed from string like "0.97,0.76,0.615,0.5,0.395,0.28,0.18,0.085,0")
     # If provided, overrides inference_steps and shift
     timesteps: Optional[List[float]] = None
@@ -150,6 +164,26 @@ class GenerationParams:
     repaint_wav_crossfade_sec: float = 0.0  # waveform-level splice crossfade (seconds, 0=hard cut)
     repaint_mode: str = "balanced"  # "conservative", "balanced", or "aggressive"
     repaint_strength: float = 0.5  # 0.0=aggressive, 1.0=conservative (balanced mode only)
+    # Retake (issue #1155): variance-preserving noise mixing for variation generation.
+    # retake_variance=0 is a no-op; the retake_seed is only consumed when variance>0.
+    retake_seed: Optional[Union[str, int]] = None
+    retake_variance: float = 0.0
+    # Flow-edit overlay (issue #1156): when True on a cover/cover-nofsq
+    # task, paint the source audio toward the user's caption/lyrics by
+    # integrating V_delta = V_tar(caption, lyrics) - V_src(source_caption,
+    # source_lyrics) over [n_min, n_max].  The overlay layers on top of
+    # the existing cover dispatch — there is no standalone "edit" task
+    # type.  ``flow_edit_source_caption`` / ``flow_edit_source_lyrics``
+    # describe the *original* audio (what V_src is conditioned on);
+    # ``caption`` / ``lyrics`` are the *target* (what V_tar morphs toward).
+    # v1 disables DCW / heun / ADG inside the loop; see #1156 for the
+    # follow-up plan.
+    flow_edit_morph: bool = False
+    flow_edit_source_caption: str = ""
+    flow_edit_source_lyrics: str = ""
+    flow_edit_n_min: float = 0.0
+    flow_edit_n_max: float = 1.0
+    flow_edit_n_avg: int = 1
     audio_cover_strength: float = 1.0
     cover_noise_strength: float = 0.0  # 0=pure noise (no cover), 1=closest to src audio
 
@@ -162,7 +196,7 @@ class GenerationParams:
     lm_negative_prompt: str = "NO USER INPUT"
     use_cot_metas: bool = True
     use_cot_caption: bool = True
-    use_cot_lyrics: bool = False  # TODO: not used yet
+    use_cot_lyrics: bool = False  # gate is read in cli.py; not consumed by inference (see cot_lyrics below)
     use_cot_language: bool = True
     use_constrained_decoding: bool = True
 
@@ -354,7 +388,19 @@ def generate_music(
     """
     try:
         # Phase 1: LM-based metadata and code generation (if enabled)
-        audio_code_string_to_use = params.audio_codes
+        # Flow-edit overlay on text2music must use the *VAE encoding* of
+        # ``src_audio`` as the V_delta integration's starting latent, not
+        # codes-decoded latents.  ``conditioning_target._prepare_target_latents_and_wavs``
+        # otherwise replaces target_wavs with zeros and drops in
+        # ``_decode_audio_codes_to_latents(codes)`` whose output sits at a
+        # different distribution than the VAE encoder produces — zt_edit
+        # starts OOD and the integration collapses to a near-silent latent
+        # (peak ~0.007 in the user's repro).  Drop the codes here so the
+        # downstream pipeline VAE-encodes the user's mp3 cleanly.
+        if params.task_type == "text2music" and params.flow_edit_morph:
+            audio_code_string_to_use = ""
+        else:
+            audio_code_string_to_use = params.audio_codes
         lm_generated_metadata = None
         lm_generated_audio_codes_list = []
         lm_total_time_costs = {
@@ -414,8 +460,20 @@ def generate_music(
         # and don't need LM to generate audio codes or metadata.
         # For extract tasks, LLM-generated captions can conflict with the extract instruction
         # and cause the DiT model to reconstruct input audio instead of extracting stems.
-        skip_lm_tasks = {"cover", "repaint", "extract"}
-        
+        skip_lm_tasks = {"cover", "cover-nofsq", "repaint", "extract"}
+        # Flow-edit overlay on text2music must NOT trigger LM Phase 1.
+        # Even if Think is on, the LM-generated codes would be routed
+        # into ``conditioning_target`` which replaces target_wavs with
+        # zeros and uses ``_decode_audio_codes_to_latents(codes)`` for
+        # target_latents — flow-edit's ``zt_edit = src_latents.clone()``
+        # then starts at a codes-decoded latent (different distribution
+        # than VAE encode) and the V_delta integration collapses to a
+        # near-silent latent.  Treat morph-on-text2music like a skip
+        # task so Think / CoT both no-op.
+        morph_on_text2music = (
+            params.task_type == "text2music" and params.flow_edit_morph
+        )
+
         # Determine if we should use LLM
         # LLM is needed for:
         # 1. thinking=True: generate audio codes via LM
@@ -423,11 +481,13 @@ def generate_music(
         # 3. use_cot_language=True: detect vocal language via CoT
         # 4. use_cot_metas=True: fill missing metadata via CoT
         need_lm_for_cot = params.use_cot_caption or params.use_cot_language or params.use_cot_metas
-        use_lm = (params.thinking or need_lm_for_cot) and llm_handler is not None and llm_handler.llm_initialized and params.task_type not in skip_lm_tasks
+        skip_lm = params.task_type in skip_lm_tasks or morph_on_text2music
+        use_lm = (params.thinking or need_lm_for_cot) and llm_handler is not None and llm_handler.llm_initialized and not skip_lm
         lm_status = []
-        
-        if params.task_type in skip_lm_tasks:
-            logger.info(f"Skipping LM for task_type='{params.task_type}' - using DiT directly")
+
+        if skip_lm:
+            reason = params.task_type if params.task_type in skip_lm_tasks else f"{params.task_type}+flow_edit_morph"
+            logger.info(f"Skipping LM for task_type='{reason}' - using DiT directly")
         
         logger.info(f"[generate_music] LLM usage decision: thinking={params.thinking}, "
                    f"use_cot_caption={params.use_cot_caption}, use_cot_language={params.use_cot_language}, "
@@ -598,7 +658,7 @@ def generate_music(
                 dit_input_vocal_language = lm_generated_metadata.get("vocal_language", dit_input_vocal_language)
 
         # Repaint/cover/extract: no LM run, so conditioning must come from params (caption + lyrics from GUI).
-        if params.task_type in ("repaint", "cover", "extract"):
+        if params.task_type in ("repaint", "cover", "cover-nofsq", "extract"):
             dit_input_caption = params.caption or dit_input_caption
             dit_input_lyrics = params.lyrics if params.lyrics is not None else dit_input_lyrics
             logger.info(f"[generate_music] {params.task_type} task: using params.caption='{params.caption}', params.lyrics='{params.lyrics}'")
@@ -607,7 +667,7 @@ def generate_music(
         # Cover/repaint/lego/extract: duration is locked to the source audio
         # length.  Silently ignore whatever the caller passed — the handler
         # will set audio_duration from the loaded waveform.
-        if params.task_type in ("cover", "repaint", "lego", "extract"):
+        if params.task_type in ("cover", "cover-nofsq", "repaint", "lego", "extract"):
             audio_duration = None
 
         # Phase 2: DiT music generation
@@ -627,9 +687,14 @@ def generate_music(
             "reference_audio": params.reference_audio,
             "audio_duration": audio_duration,
             "batch_size": config.batch_size if config.batch_size is not None else 1,
-            # text2music (Custom mode) never uses src_audio; force None to
-            # prevent stale UI values from leaking into generation.
-            "src_audio": None if params.task_type == "text2music" else params.src_audio,
+            # text2music (Custom mode) never uses src_audio EXCEPT when
+            # flow_edit_morph=True — the overlay needs ``src_audio`` for
+            # zt_src/zt_tar formation in the V_delta integration.
+            "src_audio": (
+                params.src_audio
+                if params.task_type != "text2music" or params.flow_edit_morph
+                else None
+            ),
             "audio_code_string": audio_code_string_to_use,
             "repainting_start": params.repainting_start,
             "repainting_end": params.repainting_end,
@@ -638,6 +703,14 @@ def generate_music(
             "repaint_wav_crossfade_sec": params.repaint_wav_crossfade_sec,
             "repaint_mode": params.repaint_mode,
             "repaint_strength": params.repaint_strength,
+            "retake_seed": params.retake_seed,
+            "retake_variance": params.retake_variance,
+            "flow_edit_morph": params.flow_edit_morph,
+            "flow_edit_source_caption": params.flow_edit_source_caption,
+            "flow_edit_source_lyrics": params.flow_edit_source_lyrics,
+            "flow_edit_n_min": params.flow_edit_n_min,
+            "flow_edit_n_max": params.flow_edit_n_max,
+            "flow_edit_n_avg": params.flow_edit_n_avg,
             "instruction": params.instruction,
             "audio_cover_strength": params.audio_cover_strength,
             "cover_noise_strength": params.cover_noise_strength,
@@ -651,6 +724,11 @@ def generate_music(
             "scheduler_type": params.scheduler_type,
             "velocity_norm_threshold": params.velocity_norm_threshold,
             "velocity_ema_factor": params.velocity_ema_factor,
+            "dcw_enabled": params.dcw_enabled,
+            "dcw_mode": params.dcw_mode,
+            "dcw_scaler": params.dcw_scaler,
+            "dcw_high_scaler": params.dcw_high_scaler,
+            "dcw_wavelet": params.dcw_wavelet,
             "timesteps": params.timesteps,
             "latent_shift": params.latent_shift,
             "latent_rescale": params.latent_rescale,
@@ -697,6 +775,19 @@ def generate_music(
         if save_dir is not None:
             os.makedirs(save_dir, exist_ok=True)
 
+        # Resolve per-sample retake seeds (handler returns a comma-joined string
+        # of the actually-used seeds when retake_variance > 0).  We thread these
+        # back into per-audio params so the UUID hash includes the seed that
+        # actually produced the output, not the (possibly None) caller input.
+        # Without this, repeated runs with retake_seed=None and a fixed main
+        # seed would collide on UUID even though the audio differs.
+        retake_seed_value_str = (dit_extra_outputs or {}).get("retake_seed_value", "") or ""
+        retake_seeds_resolved = (
+            [s.strip() for s in retake_seed_value_str.split(",") if s.strip()]
+            if retake_seed_value_str
+            else []
+        )
+
         # Build audios list for GenerationResult with params and save files
         # Audio saving and UUID generation handled here, outside of handler
         audios = []
@@ -706,6 +797,12 @@ def generate_music(
 
             # Update audio-specific values
             audio_params["seed"] = seed_list[idx] if idx < len(seed_list) else None
+            if retake_seeds_resolved:
+                audio_params["retake_seed"] = (
+                    retake_seeds_resolved[idx]
+                    if idx < len(retake_seeds_resolved)
+                    else retake_seeds_resolved[0]
+                )
 
             # Add LM-generated audio codes (only if non-empty, to preserve
             # user-provided codes when LM was used only for CoT metas)

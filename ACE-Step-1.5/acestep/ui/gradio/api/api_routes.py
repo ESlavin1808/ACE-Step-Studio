@@ -127,8 +127,12 @@ atexit.register(_close_result_cache)
 # =============================================================================
 
 def _get_project_root() -> str:
-    """Get project root directory"""
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    """Get project root directory.
+
+    File path: ACE-Step-1.5/acestep/ui/gradio/api/api_routes.py
+    Need to walk up 5 levels to reach the project root (ACE-Step-1.5/).
+    """
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 
 def _load_all_examples(sample_mode: str = "simple_mode") -> List[Dict[str, Any]]:
@@ -233,6 +237,53 @@ async def health_check(request: Request):
         "chunked_ffn": chunked_ffn,
         "pinned_memory": pinned_memory,
     })
+
+
+@router.post("/v1/create_sample_from_query")
+async def create_sample_from_query(request: Request):
+    """Generate full song metadata + lyrics from a natural-language description.
+
+    Our custom endpoint — Express Simple Mode (Magic Wand) calls this to get
+    auto-generated lyrics from a description. Upstream's `/format_input` only
+    formats user-provided lyrics; if you pass empty lyrics it sets `[Instrumental]`
+    instead of generating them. We need the inspiration path that runs the LLM
+    on `query` directly to produce lyrics.
+    """
+    llm_handler = getattr(request.app.state, 'llm_handler', None)
+    if not llm_handler or not getattr(llm_handler, 'llm_initialized', False):
+        return _wrap_response(None, code=500, error="LLM not initialized")
+
+    body = await request.json()
+    query = (body.get("query") or body.get("prompt") or "").strip()
+    if not query:
+        return _wrap_response(None, code=400, error="query (description) is required")
+
+    instrumental = bool(body.get("instrumental", False))
+    vocal_language = body.get("vocal_language") or body.get("vocalLanguage") or None
+    temperature = float(body.get("temperature", 0.85))
+
+    try:
+        metadata, status = llm_handler.create_sample_from_query(
+            query=query,
+            instrumental=instrumental,
+            vocal_language=vocal_language,
+            temperature=temperature,
+            use_constrained_decoding=True,
+        )
+        if not metadata:
+            return _wrap_response(None, code=500, error=status or "Failed to create sample")
+        return _wrap_response({
+            "caption": metadata.get("caption", ""),
+            "lyrics": metadata.get("lyrics", ""),
+            "bpm": metadata.get("bpm", 0),
+            "duration": metadata.get("duration", -1),
+            "key_scale": metadata.get("keyscale", ""),
+            "vocal_language": metadata.get("language", vocal_language or "unknown"),
+            "time_signature": metadata.get("timesignature", ""),
+            "instrumental": metadata.get("instrumental", instrumental),
+        })
+    except Exception as e:
+        return _wrap_response(None, code=500, error=str(e))
 
 
 @router.post("/v1/cancel")
@@ -493,6 +544,7 @@ async def init_model(request: Request):
         return _wrap_response(None, code=500, error=f"Model initialization failed: {str(exc)}")
 
 
+
 @router.post("/release_task")
 async def release_task(request: Request, authorization: Optional[str] = Header(None)):
     """Create music generation task"""
@@ -722,8 +774,8 @@ async def release_task(request: Request, authorization: Optional[str] = Header(N
 
 
 # Origins that are expected to call the API:
-#  - "null"                     → studio.html opened via file:// protocol
-#  - http://localhost:*         → local dev servers / Gradio UI
+#  - "null"                    → local files opened via file:// protocol
+#  - http://localhost:*        → local dev servers / Gradio UI
 #  - http://127.0.0.1:*        → same, numeric form
 _CORS_KWARGS = dict(
     allow_origins=["null", "http://localhost", "http://127.0.0.1"],
@@ -734,7 +786,7 @@ _CORS_KWARGS = dict(
 
 
 def _add_cors_middleware(app):
-    """Add CORS middleware so browser-based frontends (e.g. studio.html via file://) can call the API."""
+    """Add CORS middleware so browser-based local frontends can call the API."""
     app.add_middleware(CORSMiddleware, **_CORS_KWARGS)
 
 

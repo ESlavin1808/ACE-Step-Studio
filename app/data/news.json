@@ -1,5 +1,29 @@
 [
   {
+    "id": "upstream-sync-v0-1-7-dcw-retake",
+    "date": "2026-05-04",
+    "title": {
+      "en": "🎛️ Upstream sync — DCW quality boost, Retake, MLX & infer-steps fix",
+      "ru": "🎛️ Sync с upstream — DCW буст качества, Retake, MLX и fix infer-steps",
+      "zh": "🎛️ 上游同步 — DCW 质量提升、Retake、MLX 和 infer-steps 修复",
+      "ja": "🎛️ Upstream 同期 — DCW 品質向上、Retake、MLX、infer-steps 修正",
+      "ko": "🎛️ Upstream 동기화 — DCW 품질 향상, Retake, MLX, infer-steps 수정"
+    },
+    "body": {
+      "en": "Synced with upstream ACE-Step v0.1.7 + post-release fixes (May 1). Big quality update.\n\nNew features:\n• DCW (Differential Correction in Wavelet domain) — CVPR 2026 paper, training-free quality boost on every sampler step. Default ON. New panel in Custom mode: Mode (low/high/double/pix) + Wavelet (haar/db4/sym8/...) + 2 strength sliders.\n• Retake — variation seed with Variance slider. Generate the same song with subtle differences (vocals, arrangement) without losing the main motif.\n• Flow-edit (#1156) — text-edit overlay on cover/text2music tasks (backend ready, UI TBD).\n• ScragVAE — alternative community VAE, swap via ACESTEP_VAE_CHECKPOINT env.\n• 7 schedulers (linear/karras/cosine/beta/sway/logit_normal/laplace) — preserved from our fork.\n\nFixes:\n• infer_steps on turbo/xl-turbo — was silently clamped to 8 steps, now respects UI value (1–20).\n• LM CFG uncond prompt aligned with training dropout format (#1127, #1128) — better lyrics quality.\n• MLX DiT static buffers fix on Apple Silicon (#1166).\n• Many smaller bug fixes from upstream.\n\nDeps update: pip install pytorch-wavelets PyWavelets (auto-installed by install.bat / Pinokio).",
+      "ru": "Синхронизация с upstream ACE-Step v0.1.7 + post-release fixes (1 мая). Большое обновление качества.\n\nНовые фичи:\n• DCW (Differential Correction in Wavelet domain) — paper CVPR 2026, бесплатный буст качества на каждом шаге сэмплера. По дефолту ВКЛ. Новая панель в Custom mode: Режим (low/high/double/pix) + Вейвлет (haar/db4/sym8/...) + 2 слайдера силы.\n• Retake — seed вариаций со слайдером Variance. Получить ту же песню с лёгкими отличиями (вокал, аранжировка) сохранив основной мотив.\n• Flow-edit (#1156) — text-edit overlay на cover/text2music (бэкенд готов, UI позже).\n• ScragVAE — альтернативный community VAE, переключается через env ACESTEP_VAE_CHECKPOINT.\n• 7 шедулеров (linear/karras/cosine/beta/sway/logit_normal/laplace) — сохранены из нашего форка.\n\nФиксы:\n• infer_steps на turbo/xl-turbo — раньше молча клампился до 8 шагов, теперь уважает значение из UI (1–20).\n• LM CFG uncond prompt выровнен с training dropout (#1127, #1128) — лучше качество лирики.\n• MLX DiT static buffers fix на Apple Silicon (#1166).\n• Куча мелких багфиксов из upstream.\n\nЗависимости: pip install pytorch-wavelets PyWavelets (автоматом ставится в install.bat / Pinokio).",
+      "zh": "与上游 ACE-Step v0.1.7 + 后续修复同步(5 月 1 日)。重大质量更新。\n\n新功能:\n• DCW (Differential Correction in Wavelet domain) — CVPR 2026 论文,每个采样器步骤的免费质量提升。默认开启。Custom 模式新面板:Mode (low/high/double/pix) + Wavelet (haar/db4/sym8/...) + 2 个强度滑块。\n• Retake — 带 Variance 滑块的变化种子。生成同一首歌但有细微差异(人声、编曲),保留主旋律。\n• Flow-edit (#1156) — cover/text2music 的文本编辑叠加(后端就绪,UI 后续添加)。\n• ScragVAE — 备选社区 VAE,通过环境变量 ACESTEP_VAE_CHECKPOINT 切换。\n• 7 种调度器 (linear/karras/cosine/beta/sway/logit_normal/laplace) — 来自我们 fork。\n\n修复:\n• turbo/xl-turbo 上的 infer_steps — 之前静默限制为 8 步,现在尊重 UI 值 (1–20)。\n• LM CFG uncond prompt 与训练 dropout 对齐 (#1127, #1128) — 更好的歌词质量。\n• Apple Silicon MLX DiT static buffers 修复 (#1166)。\n• 许多上游小 bug 修复。\n\n依赖:pip install pytorch-wavelets PyWavelets (install.bat / Pinokio 自动安装)。",
+      "ja": "Upstream ACE-Step v0.1.7 + post-release fixes (5/1) と同期。大規模な品質アップデート。\n\n新機能:\n• DCW (Differential Correction in Wavelet domain) — CVPR 2026 論文、各サンプラーステップで無料の品質向上。デフォルトオン。Custom モードに新パネル: Mode (low/high/double/pix) + Wavelet (haar/db4/sym8/...) + 2 つの強度スライダー。\n• Retake — Variance スライダー付きバリエーションシード。メインモチーフを保ちながら微妙な違い(ボーカル、編曲)で同じ曲を生成。\n• Flow-edit (#1156) — cover/text2music 用テキスト編集オーバーレイ(バックエンド準備完了、UI 後日)。\n• ScragVAE — 代替コミュニティ VAE、ACESTEP_VAE_CHECKPOINT 環境変数で切り替え。\n• 7 スケジューラ (linear/karras/cosine/beta/sway/logit_normal/laplace) — 当 fork から保持。\n\n修正:\n• turbo/xl-turbo の infer_steps — 以前は黙って 8 ステップにクランプされていた、UI 値 (1–20) を尊重するように。\n• LM CFG uncond prompt をトレーニング dropout 形式に整合 (#1127, #1128) — 歌詞品質向上。\n• Apple Silicon の MLX DiT static buffers 修正 (#1166)。\n• 多数の上流からの小さなバグ修正。\n\n依存関係: pip install pytorch-wavelets PyWavelets (install.bat / Pinokio が自動インストール)。",
+      "ko": "Upstream ACE-Step v0.1.7 + post-release fixes (5/1) 와 동기화. 대규모 품질 업데이트.\n\n새 기능:\n• DCW (Differential Correction in Wavelet domain) — CVPR 2026 논문, 각 샘플러 단계에서 무료 품질 향상. 기본 ON. Custom 모드에 새 패널: Mode (low/high/double/pix) + Wavelet (haar/db4/sym8/...) + 2 개 강도 슬라이더.\n• Retake — Variance 슬라이더가 있는 변형 시드. 메인 모티브를 유지하면서 미묘한 차이(보컬, 편곡)로 같은 곡 생성.\n• Flow-edit (#1156) — cover/text2music 용 텍스트 편집 오버레이 (백엔드 준비, UI 추후).\n• ScragVAE — 대체 커뮤니티 VAE, ACESTEP_VAE_CHECKPOINT 환경 변수로 전환.\n• 7 스케줄러 (linear/karras/cosine/beta/sway/logit_normal/laplace) — 우리 fork 에서 유지.\n\n수정사항:\n• turbo/xl-turbo 의 infer_steps — 이전에는 8 단계로 무음 클램프, 이제 UI 값 (1–20) 존중.\n• LM CFG uncond prompt 를 훈련 dropout 형식과 정렬 (#1127, #1128) — 가사 품질 향상.\n• Apple Silicon MLX DiT static buffers 수정 (#1166).\n• 다수의 upstream 작은 버그 수정.\n\n의존성: pip install pytorch-wavelets PyWavelets (install.bat / Pinokio 자동 설치)."
+    },
+    "tags": ["update", "quality", "upstream-sync"],
+    "links": [
+      { "label": "📄 DCW paper (arXiv 2604.16044)", "url": "https://arxiv.org/abs/2604.16044" },
+      { "label": "🔬 Upstream ACE-Step v0.1.7 release", "url": "https://github.com/ace-step/ACE-Step-1.5/releases/tag/v0.1.7" },
+      { "label": "📦 ACE-Step Studio repo", "url": "https://github.com/timoncool/ACE-Step-Studio" }
+    ]
+  },
+  {
     "id": "support-open-source-ai",
     "date": "2026-04-23",
     "title": {

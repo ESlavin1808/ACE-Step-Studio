@@ -56,6 +56,11 @@ def register_generation_mode_handlers(
         generation_section["generation_mode"],
         generation_section["previous_generation_mode"],
     ]
+    dcw_default_outputs = [
+        generation_section["dcw_mode"],
+        generation_section["dcw_scaler"],
+        generation_section["dcw_high_scaler"],
+    ]
 
     # ========== Generation Mode Change ==========
     generation_section["generation_mode"].change(
@@ -73,10 +78,21 @@ def register_generation_mode_handlers(
     # potentially other components) to be missing on page load.
     # This .load() event fires once on page load to initialize all
     # mode-dependent UI state using the same handler.
-    context.demo.load(
+    load_event = context.demo.load(
         fn=_handle_mode_change,
         inputs=mode_change_inputs,
         outputs=mode_ui_outputs,
+    )
+    load_event.then(
+        fn=gen_h.update_dcw_defaults_for_think,
+        inputs=[generation_section["think_checkbox"]],
+        outputs=dcw_default_outputs,
+    )
+
+    generation_section["think_checkbox"].change(
+        fn=gen_h.update_dcw_defaults_for_think,
+        inputs=[generation_section["think_checkbox"]],
+        outputs=dcw_default_outputs,
     )
 
     # ========== Extract Mode: Auto-fill caption from track_name ==========
@@ -113,7 +129,6 @@ def register_generation_mode_handlers(
         outputs=[generation_section["simple_vocal_language"]],
     )
 
-    # ========== Random Description Button ==========
     generation_section["random_desc_btn"].click(
         fn=gen_h.load_random_simple_description,
         inputs=[],
@@ -124,12 +139,10 @@ def register_generation_mode_handlers(
         ],
     )
 
-    # ========== Create Sample Button (Simple Mode) ==========
     generation_section["create_sample_btn"].click(
         fn=lambda query, instrumental, vocal_lang, temp, top_k, top_p, debug: gen_h.handle_create_sample(
             llm_handler, query, instrumental, vocal_lang, temp, top_k, top_p, debug
         ),
-        api_name="create_sample",
         inputs=[
             generation_section["simple_query_input"],
             generation_section["simple_instrumental_checkbox"],
@@ -162,7 +175,6 @@ def register_generation_mode_handlers(
         outputs=list(auto_checkbox_outputs),
     )
 
-    # ========== Repaint Mode <-> Strength Bidirectional Sync ==========
     generation_section["repaint_mode"].change(
         fn=_on_repaint_mode_change,
         inputs=[

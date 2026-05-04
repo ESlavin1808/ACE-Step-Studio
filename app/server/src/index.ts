@@ -34,6 +34,16 @@ import { pipelineManager } from './services/pipeline-manager.js';
 import { pool } from './db/pool.js';
 import './db/migrate.js';
 
+// Don't crash on unhandled rejections from third-party clients (e.g. @gradio/client
+// throws after stream close on missing endpoints). Log + continue serving requests.
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = (reason instanceof Error) ? reason.message : String(reason);
+  console.error('[unhandledRejection]', msg);
+});
+process.on('uncaughtException', (err: Error) => {
+  console.error('[uncaughtException]', err.message);
+});
+
 const app = express();
 
 // Security headers

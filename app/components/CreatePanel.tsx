@@ -231,7 +231,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [constrainedDecodingDebug, setConstrainedDecodingDebug] = useState(false);
   const [allowLmBatch, setAllowLmBatch] = useState(true);
   const [getScores, setGetScores] = useState(false);
-  const [getLrc, setGetLrc] = useState(true);
+  const [getLrc, setGetLrc] = useState(false);
   const [scoreScale, setScoreScale] = useState(0.5);
   const [lmBatchChunkSize, setLmBatchChunkSize] = useState(8);
   const [trackName, setTrackName] = useState('');
@@ -241,6 +241,16 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   // v1.5 XL parameters
   const [samplerMode, setSamplerMode] = useState('euler');
   const [schedulerType, setSchedulerType] = useState('linear');
+  // DCW (Differential Correction in Wavelet domain) — CVPR 2026 quality boost.
+  // Default ON per upstream v0.1.7. No-op when pytorch_wavelets is missing.
+  const [dcwEnabled, setDcwEnabled] = useState(true);
+  const [dcwMode, setDcwMode] = useState<'low' | 'high' | 'double' | 'pix'>('double');
+  const [dcwScaler, setDcwScaler] = useState(0.05);
+  const [dcwHighScaler, setDcwHighScaler] = useState(0.02);
+  const [dcwWavelet, setDcwWavelet] = useState('haar');
+  // Retake — variance-preserving blend with an independent noise draw
+  const [retakeSeed, setRetakeSeed] = useState('-1');
+  const [retakeVariance, setRetakeVariance] = useState(0.0);
   const [mp3Bitrate, setMp3Bitrate] = useState('128k');
   const [mp3SampleRate, setMp3SampleRate] = useState(48000);
   const [fadeInDuration, setFadeInDuration] = useState(0.0);
@@ -271,6 +281,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         customMode, instrumental, vocalLanguage, vocalGender, bpm, keyScale, timeSignature, duration, batchSize, bulkCount,
         guidanceScale, thinking, enhance, getLrc, audioFormat, inferenceSteps, inferMethod,
         shift, lmTemperature, lmCfgScale, lmTopK, lmTopP, lmNegativePrompt, useAdg, samplerMode, schedulerType,
+        dcwEnabled, dcwMode, dcwScaler, dcwHighScaler, dcwWavelet, retakeSeed, retakeVariance,
         mp3Bitrate, mp3SampleRate, ...overrides,
       };
       settingsApi.save(settings, token).catch(() => {});
@@ -278,6 +289,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   }, [token, customMode, instrumental, vocalLanguage, vocalGender, bpm, keyScale, timeSignature, duration, batchSize, bulkCount,
       guidanceScale, thinking, enhance, getLrc, audioFormat, inferenceSteps, inferMethod,
       shift, lmTemperature, lmCfgScale, lmTopK, lmTopP, lmNegativePrompt, useAdg, samplerMode, schedulerType,
+      dcwEnabled, dcwMode, dcwScaler, dcwHighScaler, dcwWavelet, retakeSeed, retakeVariance,
       mp3Bitrate, mp3SampleRate]);
 
   // Auto-save when any setting changes
@@ -325,6 +337,13 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
       // useAdg — auto-determined by model via useEffect
       if (s.samplerMode !== undefined) setSamplerMode(s.samplerMode as string);
       if (s.schedulerType !== undefined) setSchedulerType(s.schedulerType as string);
+      if (s.dcwEnabled !== undefined) setDcwEnabled(s.dcwEnabled as boolean);
+      if (s.dcwMode !== undefined) setDcwMode(s.dcwMode as 'low' | 'high' | 'double' | 'pix');
+      if (s.dcwScaler !== undefined) setDcwScaler(Number(s.dcwScaler));
+      if (s.dcwHighScaler !== undefined) setDcwHighScaler(Number(s.dcwHighScaler));
+      if (s.dcwWavelet !== undefined) setDcwWavelet(s.dcwWavelet as string);
+      if (s.retakeSeed !== undefined) setRetakeSeed(String(s.retakeSeed));
+      if (s.retakeVariance !== undefined) setRetakeVariance(Number(s.retakeVariance));
       if (s.mp3Bitrate !== undefined) setMp3Bitrate(s.mp3Bitrate as string);
       if (s.mp3SampleRate !== undefined) setMp3SampleRate(s.mp3SampleRate as number);
       settingsLoadedRef.current = true;
@@ -1358,6 +1377,13 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         isFormatCaption,
         samplerMode,
         schedulerType,
+        dcwEnabled,
+        dcwMode,
+        dcwScaler,
+        dcwHighScaler,
+        dcwWavelet,
+        retakeSeed: Number(retakeSeed) || -1,
+        retakeVariance,
         mp3Bitrate,
         mp3SampleRate,
         fadeInDuration: fadeInDuration > 0 ? fadeInDuration : undefined,
@@ -1393,7 +1419,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         lmModel: 'acestep-5Hz-lm-0.6B',
         shift: 3.0,
         taskType: 'text2music',
-        getLrc: true,
+        getLrc,
         getScores: false,
         loraLoaded,
       });
@@ -2458,6 +2484,111 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                     </>
                   )}
                 </select>
+              </div>
+            </div>
+
+            {/* DCW (Differential Correction in Wavelet domain) — CVPR 2026 quality boost */}
+            <div className="rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-50/50 dark:bg-black/10 p-3 space-y-2">
+              <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={dcwEnabled}
+                  onChange={(e) => setDcwEnabled(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded accent-pink-500"
+                />
+                {t('dcwEnabledLabel') || 'DCW Quality Correction'}
+              </label>
+              {dcwEnabled && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-zinc-600 dark:text-zinc-400">{t('dcwModeLabel') || 'Mode'}</label>
+                      <select
+                        value={dcwMode}
+                        onChange={(e) => setDcwMode(e.target.value as 'low' | 'high' | 'double' | 'pix')}
+                        className="w-full bg-white dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800"
+                      >
+                        <option value="low">Low band</option>
+                        <option value="high">High band</option>
+                        <option value="double">Double (recommended)</option>
+                        <option value="pix">Pixel</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-zinc-600 dark:text-zinc-400">{t('dcwWaveletLabel') || 'Wavelet'}</label>
+                      <select
+                        value={dcwWavelet}
+                        onChange={(e) => setDcwWavelet(e.target.value)}
+                        className="w-full bg-white dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800"
+                      >
+                        <option value="haar">Haar (default)</option>
+                        <option value="db2">db2</option>
+                        <option value="db4">db4</option>
+                        <option value="sym4">sym4</option>
+                        <option value="sym8">sym8</option>
+                        <option value="coif2">coif2</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-zinc-600 dark:text-zinc-400 flex justify-between">
+                        <span>{t('dcwScalerLabel') || 'Low scaler'}</span>
+                        <span className="text-zinc-500">{dcwScaler.toFixed(3)}</span>
+                      </label>
+                      <input
+                        type="range" min={0} max={0.1} step={0.005}
+                        value={dcwScaler}
+                        onChange={(e) => setDcwScaler(Number(e.target.value))}
+                        className="w-full accent-pink-500"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-zinc-600 dark:text-zinc-400 flex justify-between">
+                        <span>{t('dcwHighScalerLabel') || 'High scaler'}</span>
+                        <span className="text-zinc-500">{dcwHighScaler.toFixed(3)}</span>
+                      </label>
+                      <input
+                        type="range" min={0} max={0.1} step={0.005}
+                        value={dcwHighScaler}
+                        onChange={(e) => setDcwHighScaler(Number(e.target.value))}
+                        disabled={dcwMode !== 'double'}
+                        className="w-full accent-pink-500 disabled:opacity-40"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Retake — variance-preserving blend with an independent noise draw */}
+            <div className="rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-50/50 dark:bg-black/10 p-3 space-y-2">
+              <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                {t('retakeLabel') || 'Retake (variation seed)'}
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-zinc-600 dark:text-zinc-400 flex justify-between">
+                    <span>{t('retakeVarianceLabel') || 'Variance'}</span>
+                    <span className="text-zinc-500">{retakeVariance.toFixed(2)}</span>
+                  </label>
+                  <input
+                    type="range" min={0} max={1} step={0.01}
+                    value={retakeVariance}
+                    onChange={(e) => setRetakeVariance(Number(e.target.value))}
+                    className="w-full accent-pink-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-zinc-600 dark:text-zinc-400">{t('retakeSeedLabel') || 'Retake seed (-1 = random)'}</label>
+                  <input
+                    type="text"
+                    value={retakeSeed}
+                    onChange={(e) => setRetakeSeed(e.target.value.replace(/[^0-9-]/g, ''))}
+                    disabled={retakeVariance === 0}
+                    className="w-full bg-white dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 disabled:opacity-40"
+                  />
+                </div>
               </div>
             </div>
 

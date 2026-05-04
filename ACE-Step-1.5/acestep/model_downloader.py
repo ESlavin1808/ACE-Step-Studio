@@ -327,6 +327,17 @@ MAIN_MODEL_COMPONENTS = [
 # Default LM model (included in main model)
 DEFAULT_LM_MODEL = "acestep-5Hz-lm-0.6B"
 
+# Optional community-finetuned VAE checkpoints. Each entry maps a short
+# variant id (also used as the on-disk subdirectory under
+# <checkpoints>/) to its HuggingFace repo id. The bundled official VAE
+# stays at <checkpoints>/vae/ and is referenced as variant id "official".
+VAE_REGISTRY: Dict[str, str] = {
+    "scragvae": "scragnog/Ace-Step-1.5-ScragVAE",
+}
+
+# Variant id used for the bundled VAE that ships with the main model repo.
+DEFAULT_VAE_VARIANT = "official"
+
 
 def get_project_root() -> Path:
     """Get the project root directory.
@@ -407,11 +418,11 @@ def check_main_model_exists(checkpoints_dir: Optional[Path] = None) -> bool:
 def check_model_exists(model_name: str, checkpoints_dir: Optional[Path] = None) -> bool:
     """
     Check if a specific model exists in the checkpoints directory.
-    
+
     Args:
         model_name: Name of the model to check
         checkpoints_dir: Custom checkpoints directory (optional)
-    
+
     Returns:
         True if the model exists, False otherwise.
     """
@@ -430,7 +441,7 @@ def check_model_exists(model_name: str, checkpoints_dir: Optional[Path] = None) 
 def list_available_models() -> Dict[str, str]:
     """
     List all available models for download.
-    
+
     Returns:
         Dictionary mapping local names to HuggingFace repo IDs.
     """
@@ -451,10 +462,12 @@ def download_main_model(
     Download the main ACE-Step model from HuggingFace or ModelScope.
 
     The main model includes:
-    - acestep-v15-turbo (default DiT model)
     - vae (audio encoder/decoder)
     - Qwen3-Embedding-0.6B (text encoder)
-    - acestep-5Hz-lm-1.7B (default LM model)
+    - acestep-5Hz-lm-0.6B (default LM model)
+
+    DiT model weights are skipped here and downloaded separately via
+    ensure_dit_model() to allow flexible model selection.
 
     Args:
         checkpoints_dir: Custom checkpoints directory (optional)
@@ -526,6 +539,8 @@ def download_submodel(
 
     model_path = checkpoints_dir / model_name
 
+    # Use weights check, not just .exists() — empty dir from a failed download
+    # otherwise reports as "already exists" (our fix from c0588372b).
     if not force and _contains_model_weights(model_path):
         return True, f"Model '{model_name}' already exists at {model_path}"
 
@@ -551,12 +566,12 @@ def download_all_models(
 ) -> Tuple[bool, List[str]]:
     """
     Download all available models.
-    
+
     Args:
         checkpoints_dir: Custom checkpoints directory (optional)
         force: Force re-download even if models exist
         token: HuggingFace token for private repos (optional)
-    
+
     Returns:
         Tuple of (all_success, list of messages)
     """
@@ -567,20 +582,20 @@ def download_all_models(
 
     messages = []
     all_success = True
-    
+
     # Download main model first
     success, msg = download_main_model(checkpoints_dir, force, token)
     messages.append(msg)
     if not success:
         all_success = False
-    
+
     # Download all sub-models
     for model_name in SUBMODEL_REGISTRY:
         success, msg = download_submodel(model_name, checkpoints_dir, force, token)
         messages.append(msg)
         if not success:
             all_success = False
-    
+
     return all_success, messages
 
 
@@ -704,6 +719,136 @@ def ensure_dit_model(
     return False, f"Unknown DiT model: {model_name}"
 
 
+def list_available_vae_variants() -> List[str]:
+    """Return all selectable VAE variant ids (official first)."""
+    return [DEFAULT_VAE_VARIANT, *VAE_REGISTRY.keys()]
+
+
+def resolve_vae_path(checkpoint_dir: "str | Path", vae_variant: Optional[str]) -> Path:
+    """Resolve a VAE variant id (or absolute path) to its on-disk directory.
+
+    Args:
+        checkpoint_dir: Root checkpoints directory.
+        vae_variant: Variant id (``"official"`` or a key in ``VAE_REGISTRY``)
+            or an absolute filesystem path. ``None`` / ``""`` is treated as
+            ``"official"``.
+
+    Returns:
+        Absolute path of the VAE checkpoint directory.
+
+    Raises:
+        ValueError: If ``vae_variant`` is not recognized.
+    """
+    if isinstance(checkpoint_dir, str):
+        checkpoint_dir = Path(checkpoint_dir)
+    if not vae_variant:
+        return checkpoint_dir / "vae"
+    if os.path.isabs(vae_variant):
+        return Path(vae_variant)
+    if vae_variant == DEFAULT_VAE_VARIANT:
+        return checkpoint_dir / "vae"
+    if vae_variant in VAE_REGISTRY:
+        return checkpoint_dir / vae_variant
+    raise ValueError(
+        f"Unknown VAE variant '{vae_variant}'. Available: "
+        f"{', '.join(list_available_vae_variants())}"
+    )
+
+
+def check_vae_exists(vae_variant: str, checkpoints_dir: Optional[Path] = None) -> bool:
+    """Return whether the requested VAE variant has weights on disk."""
+    if checkpoints_dir is None:
+        checkpoints_dir = get_checkpoints_dir()
+    elif isinstance(checkpoints_dir, str):
+        checkpoints_dir = Path(checkpoints_dir)
+    try:
+        path = resolve_vae_path(checkpoints_dir, vae_variant)
+    except ValueError:
+        return False
+    return _contains_model_weights(path)
+
+
+def download_vae(
+    vae_variant: str,
+    checkpoints_dir: Optional[Path] = None,
+    force: bool = False,
+    token: Optional[str] = None,
+    prefer_source: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Download a community VAE variant into ``<checkpoints>/<variant>/``.
+
+    The bundled ``"official"`` VAE is *not* downloaded here — it ships
+    with the main model and is fetched by ``download_main_model``.
+    """
+    if vae_variant == DEFAULT_VAE_VARIANT:
+        return False, (
+            f"VAE variant '{DEFAULT_VAE_VARIANT}' ships with the main model; "
+            "use download_main_model() instead."
+        )
+    if vae_variant not in VAE_REGISTRY:
+        available = ", ".join(VAE_REGISTRY.keys()) or "(none)"
+        return False, f"Unknown VAE variant '{vae_variant}'. Available: {available}"
+
+    if checkpoints_dir is None:
+        checkpoints_dir = get_checkpoints_dir()
+    elif isinstance(checkpoints_dir, str):
+        checkpoints_dir = Path(checkpoints_dir)
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
+    target_path = checkpoints_dir / vae_variant
+    if not force and _contains_model_weights(target_path):
+        return True, f"VAE variant '{vae_variant}' already exists at {target_path}"
+
+    repo_id = VAE_REGISTRY[vae_variant]
+    print(f"Downloading VAE '{vae_variant}' from {repo_id}...")
+    print(f"Destination: {target_path}")
+
+    return _smart_download(repo_id, target_path, token, prefer_source)
+
+
+def ensure_vae_model(
+    vae_variant: Optional[str] = None,
+    checkpoints_dir: Optional[Path] = None,
+    token: Optional[str] = None,
+    prefer_source: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Ensure the requested VAE variant is on disk, downloading if needed.
+
+    For ``"official"`` (or ``None``) this defers to ``ensure_main_model``
+    since the bundled VAE travels with the main model. For registered
+    community variants this calls ``download_vae`` when the directory
+    is missing.
+    """
+    if not vae_variant or vae_variant == DEFAULT_VAE_VARIANT:
+        return ensure_main_model(checkpoints_dir, token, prefer_source)
+
+    if checkpoints_dir is None:
+        checkpoints_dir = get_checkpoints_dir()
+    elif isinstance(checkpoints_dir, str):
+        checkpoints_dir = Path(checkpoints_dir)
+
+    if check_vae_exists(vae_variant, checkpoints_dir):
+        return True, f"VAE variant '{vae_variant}' is available"
+
+    # Absolute paths are user-supplied and cannot be downloaded. Fail with a
+    # clear, path-specific diagnostic instead of routing through download_vae,
+    # which would surface a misleading "Unknown VAE variant" error.
+    if os.path.isabs(vae_variant):
+        path = Path(vae_variant)
+        if not path.exists():
+            return False, f"VAE path '{vae_variant}' does not exist."
+        return False, (
+            f"VAE path '{vae_variant}' does not contain VAE weights "
+            "(expected diffusion_pytorch_model.safetensors)."
+        )
+
+    print("\n" + "=" * 60)
+    print(f"VAE variant '{vae_variant}' not found. Starting automatic download...")
+    print("=" * 60 + "\n")
+
+    return download_vae(vae_variant, checkpoints_dir, token=token, prefer_source=prefer_source)
+
+
 def print_model_list():
     """Print formatted list of available models."""
     print("\nAvailable Models for Download:")
@@ -712,7 +857,7 @@ def print_model_list():
 
     print("\n[Main Model]")
     print(f"  main -> {MAIN_MODEL_REPO}")
-    print("  Contains: vae, Qwen3-Embedding-0.6B, acestep-v15-turbo, acestep-5Hz-lm-1.7B")
+    print("  Contains: vae, Qwen3-Embedding-0.6B, acestep-5Hz-lm-0.6B")
 
     print("\n[Optional LM Models]")
     for name, repo in SUBMODEL_REGISTRY.items():
@@ -722,6 +867,12 @@ def print_model_list():
     print("\n[Optional DiT Models]")
     for name, repo in SUBMODEL_REGISTRY.items():
         if "lm" not in name.lower():
+            print(f"  {name} -> {repo}")
+
+    if VAE_REGISTRY:
+        print("\n[Optional VAEs]")
+        print(f"  official -> bundled in {MAIN_MODEL_REPO}")
+        for name, repo in VAE_REGISTRY.items():
             print(f"  {name} -> {repo}")
 
     print("\n" + "=" * 60)
@@ -734,7 +885,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  acestep-download                          # Download main model (includes LM 1.7B)
+  acestep-download                          # Download main model (vae+text+LM 0.6B)
   acestep-download --all                    # Download all available models
   acestep-download --model acestep-v15-sft  # Download a specific model
   acestep-download --list                   # List all available models
@@ -753,7 +904,7 @@ Alternative using huggingface-cli:
   huggingface-cli download ACE-Step/acestep-5Hz-lm-0.6B --local-dir ./checkpoints/acestep-5Hz-lm-0.6B
         """
     )
-    
+
     parser.add_argument(
         "--model", "-m",
         type=str,
@@ -791,25 +942,25 @@ Alternative using huggingface-cli:
         action="store_true",
         help="Skip downloading the main model (only download specified sub-model)"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Handle --list
     if args.list:
         print_model_list()
         return 0
-    
+
     # Get checkpoints directory
     checkpoints_dir = get_checkpoints_dir(args.dir) if args.dir else get_checkpoints_dir()
     print(f"Checkpoints directory: {checkpoints_dir}")
-    
+
     # Handle --all
     if args.all:
         success, messages = download_all_models(checkpoints_dir, args.force, args.token)
         for msg in messages:
             print(msg)
         return 0 if success else 1
-    
+
     # Handle --model
     if args.model:
         if args.model == "main":
@@ -822,27 +973,27 @@ Alternative using huggingface-cli:
                 print(main_msg)
                 if not main_success:
                     return 1
-            
+
             success, msg = download_submodel(args.model, checkpoints_dir, args.force, args.token)
         else:
             print(f"Unknown model: {args.model}")
             print("Use --list to see available models")
             return 1
-        
+
         print(msg)
         return 0 if success else 1
-    
-    # Default: download main model (includes default LM 1.7B)
-    print("Downloading main model (includes vae, text encoder, DiT, and LM 1.7B)...")
-    
+
+    # Default: download main model (vae + text encoder + LM 0.6B)
+    print("Downloading main model (includes vae, text encoder, and LM 0.6B)...")
+
     # Download main model
     success, msg = download_main_model(checkpoints_dir, args.force, args.token)
     print(msg)
-    
+
     if success:
         print("\nDownload complete!")
         print(f"Models are available at: {checkpoints_dir}")
-    
+
     return 0 if success else 1
 
 

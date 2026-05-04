@@ -195,6 +195,7 @@ async function buildGradioArgs(params: GenerationParams): Promise<Record<string,
     audio_cover_strength: params.audioCoverStrength ?? 1.0,
     cover_noise_strength: params.coverNoiseStrength ?? 0.0,
     task_type: taskType,
+    no_fsq: false,
     use_adg: params.useAdg ?? false,
     cfg_interval_start: params.cfgIntervalStart ?? 0.0,
     cfg_interval_end: params.cfgIntervalEnd ?? 1.0,
@@ -204,6 +205,12 @@ async function buildGradioArgs(params: GenerationParams): Promise<Record<string,
     scheduler_type: params.schedulerType || 'linear',
     velocity_norm_threshold: params.velocityNormThreshold ?? 0.0,
     velocity_ema_factor: params.velocityEmaFactor ?? 0.0,
+    // DCW (Differential Correction in Wavelet domain) — CVPR 2026 quality boost
+    dcw_enabled: params.dcwEnabled ?? true,
+    dcw_mode: params.dcwMode || 'double',
+    dcw_scaler: params.dcwScaler ?? 0.05,
+    dcw_high_scaler: params.dcwHighScaler ?? 0.02,
+    dcw_wavelet: params.dcwWavelet || 'haar',
     custom_timesteps: params.customTimesteps || '',
     audio_format: params.audioFormat || 'mp3',
     mp3_bitrate: params.mp3Bitrate || '128k',
@@ -220,7 +227,7 @@ async function buildGradioArgs(params: GenerationParams): Promise<Record<string,
     constrained_decoding_debug: params.constrainedDecodingDebug ?? false,
     allow_lm_batch: params.allowLmBatch ?? true,
     auto_score: params.getScores ?? false,
-    auto_lrc: params.getLrc ?? true,
+    auto_lrc: params.getLrc ?? false,
     score_scale: params.scoreScale ?? 0.5,
     lm_batch_chunk_size: params.lmBatchChunkSize ?? 8,
     track_name: params.trackName || null,
@@ -233,6 +240,16 @@ async function buildGradioArgs(params: GenerationParams): Promise<Record<string,
     latent_rescale: params.latentRescale ?? 1.0,
     repaint_mode: params.repaintMode || 'balanced',
     repaint_strength: params.repaintStrength ?? 0.5,
+    // Retake — variance-preserving blend with an independent noise draw
+    retake_variance: params.retakeVariance ?? 0.0,
+    retake_seed: params.retakeSeed ?? -1,
+    // Flow-edit (advanced; not exposed in our UI yet, defaults are no-op)
+    flow_edit_morph: false,
+    flow_edit_source_caption: '',
+    flow_edit_source_lyrics: '',
+    flow_edit_n_min: 0.0,
+    flow_edit_n_max: 1.0,
+    flow_edit_n_avg: 1,
     autogen_checkbox: params.autogen ?? false,
   };
 }
@@ -356,6 +373,18 @@ export interface GenerationParams {
   schedulerType?: string;
   velocityNormThreshold?: number;
   velocityEmaFactor?: number;
+
+  // DCW (Differential Correction in Wavelet domain) — CVPR 2026 quality boost
+  dcwEnabled?: boolean;
+  dcwMode?: 'low' | 'high' | 'double' | 'pix';
+  dcwScaler?: number;
+  dcwHighScaler?: number;
+  dcwWavelet?: string;
+
+  // Retake — variance-preserving blend with an independent noise draw
+  retakeSeed?: number;
+  retakeVariance?: number;
+
   mp3Bitrate?: string;
   mp3SampleRate?: number;
   enableNormalization?: boolean;

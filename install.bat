@@ -146,7 +146,7 @@ python\python.exe -m pip install hatchling editables --no-warn-script-location
 REM Install nano-vllm first (local package, needed before ace-step)
 python\python.exe -m pip install -e ACE-Step-1.5/acestep/third_parts/nano-vllm/ --no-warn-script-location
 REM Install all deps before ace-step to avoid resolver warnings
-python\python.exe -m pip install "transformers>=4.51.0,<4.58.0" diffusers gradio==6.2.0 matplotlib scipy soundfile loguru einops accelerate fastapi diskcache "uvicorn[standard]" numba vector-quantize-pytorch torchcodec "torchao>=0.16.0,<0.17.0" toml peft modelscope tensorboard typer-slim hf_transfer hf_xet lightning lycoris-lora safetensors xxhash --no-warn-script-location
+python\python.exe -m pip install "transformers>=4.51.0,<4.58.0" diffusers gradio==6.2.0 matplotlib scipy soundfile loguru einops accelerate fastapi diskcache "uvicorn[standard]" numba vector-quantize-pytorch torchcodec "torchao>=0.16.0,<0.17.0" toml peft modelscope tensorboard typer-slim hf_transfer hf_xet lightning lycoris-lora safetensors xxhash "pytorch-wavelets>=1.3.0" "pywavelets>=1.9.0" --no-warn-script-location
 REM Install triton-windows for torch.compile + CUDA graphs (skip on CPU-only)
 if not "%CUDA_VERSION%"=="cpu" (
     echo Installing Triton for torch.compile...
