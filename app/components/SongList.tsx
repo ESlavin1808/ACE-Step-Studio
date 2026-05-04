@@ -677,7 +677,14 @@ const SongItem: React.FC<SongItemProps> = ({
                                 {song.title || (song.isGenerating ? (song.queuePosition ? t('queued') || "Queued..." : (t(song.stage) || song.stage || t('creating') || "Creating...")) : t('untitled') || "Untitled")}
                             </h3>
                         )}
-                        <span className="inline-flex items-center justify-center text-[9px] font-bold text-white bg-gradient-to-r from-pink-500 to-purple-500 px-1.5 py-0.5 rounded-sm shadow-sm" title={`DiT: ${song.ditModel || '?'} | LM: ${song.lmModel || '?'} (${song.lmBackend || '?'})`}>
+                        <span
+                          className="inline-flex items-center justify-center text-[9px] font-bold text-white bg-gradient-to-r from-pink-500 to-purple-500 px-1.5 py-0.5 rounded-sm shadow-sm"
+                          title={[
+                            `DiT: ${song.ditModel || '?'}`,
+                            `LM: ${song.lmModel || '?'} (${song.lmBackend || '?'})`,
+                            song.openrouterModel ? `Text: openrouter (${song.openrouterModel})` : null,
+                          ].filter(Boolean).join(' | ')}
+                        >
                             {getModelDisplayName(song.ditModel)}
                         </span>
                         {song.generationTime != null && song.generationTime > 0 && (
