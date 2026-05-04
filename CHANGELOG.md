@@ -6,6 +6,7 @@
 - **DCW (Differential Correction in Wavelet domain)** — CVPR 2026 paper, training-free quality boost on every sampler step. Default ON. New panel in Custom mode: Mode (low/high/double/pix) + Wavelet (haar/db4/sym4/sym8/...) + 2 strength sliders
 - **Retake** — variation seed with Variance slider (variance-preserving blend with independent noise draw)
 - **Flow-edit** (#1156) — text-edit overlay morphing src toward target prompt/lyrics on text2music + cover + cover-nofsq tasks. Full UI panel in Custom mode: source caption + source lyrics + n_min/n_max range + n_avg stability
+- **Repaint "Most Natural" mode** — 4th option in Repaint task (next to Conservative/Balanced/Aggressive). Maps to maximum source preservation (injection_ratio=1.0, crossfade=25 frames + 0.05s). Useful for iterative repaint refinement with minimum drift from source across multiple passes
 - **ScragVAE** — alternative community VAE swap via `ACESTEP_VAE_CHECKPOINT` env var
 - **MLX DCW** — DCW correction for Apple Silicon path (haar native, other bases via fallback)
 - **`use_legacy_cfg_prompt`** A/B toggle for old vs training-aligned LM CFG prompt format
