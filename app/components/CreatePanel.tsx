@@ -209,6 +209,9 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   // from `lmModel` which represents the user-selected target). Empty string means
   // no local LM is currently loaded.
   const [activeLmModel, setActiveLmModel] = useState('');
+  // True after the first successful server poll — used to defer the default-ON
+  // toggle effect so we don't race against the initial render state.
+  const [serverPollSeen, setServerPollSeen] = useState<boolean>(false);
   const [shift, setShift] = useState(3.0);
 
   // OpenRouter (LLM provider) integration
@@ -330,12 +333,15 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   React.useEffect(() => { localStorage.setItem('ace-style', style); }, [style]);
   React.useEffect(() => { localStorage.setItem('ace-title', title); }, [title]);
 
-  // OpenRouter: default toggle ON in no-LM mode (only if user hasn't explicitly set it)
+  // OpenRouter: default toggle ON in no-LM mode (only if user hasn't explicitly set it).
+  // Gated on serverPollSeen so we don't race against the initial render —
+  // the initial activeLmModel='' is meaningless until the server has replied.
   useEffect(() => {
+    if (!serverPollSeen) return;
     if (llmStorage.getUseOpenRouter() === null && !activeLmModel) {
       setUseOpenRouter(true);
     }
-  }, [activeLmModel]);
+  }, [serverPollSeen, activeLmModel]);
 
   // OpenRouter: persist toggle on every change
   useEffect(() => { llmStorage.setUseOpenRouter(useOpenRouter); }, [useOpenRouter]);
@@ -432,6 +438,9 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
             // Always track the *actual* loaded LM (independent of editing state).
             // Empty string when backend reports no LM available.
             setActiveLmModel(typeof data.activeLmModel === 'string' ? data.activeLmModel : '');
+            // Mark that at least one server poll has completed successfully so the
+            // default-ON toggle effect can evaluate against real server state.
+            setServerPollSeen(true);
           }
           // During loading, show the target model
           if (data.state === 'loading' && data.model) {
