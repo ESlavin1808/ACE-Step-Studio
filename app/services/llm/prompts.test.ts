@@ -88,6 +88,7 @@ describe('buildFormat', () => {
     keyScale: 'C major',
     timeSignature: '4/4',
     language: 'en',
+    instrumental: false,
     primary: 'caption',
   };
 

@@ -16,6 +16,7 @@ export interface FormatInput {
   keyScale?: string;
   timeSignature?: string;
   language: string;
+  instrumental: boolean;
   primary: 'lyrics' | 'caption';
 }
 

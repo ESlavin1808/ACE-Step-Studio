@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OpenRouterProvider } from './openrouter';
 import { llmStorage } from './storage';
-import { OpenRouterError } from './types';
+import { OpenRouterError, SongDraft } from './types';
 
 function mockSseResponse(events: object[]): Response {
   const encoder = new TextEncoder();
@@ -16,7 +16,7 @@ function mockSseResponse(events: object[]): Response {
   return new Response(stream, { status: 200 });
 }
 
-function fullDraft(): object {
+function fullDraft(): SongDraft {
   return {
     title: 'Test',
     caption: 'rock, drums, male vocals',
