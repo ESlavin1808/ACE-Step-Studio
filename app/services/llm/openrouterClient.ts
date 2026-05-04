@@ -51,8 +51,8 @@ export class OpenRouterClient {
     };
   }
 
-  async listModels(): Promise<any[]> {
-    if (this.modelsCache && Date.now() - this.modelsCache.fetchedAt < MODELS_CACHE_TTL_MS) {
+  async listModels(force: boolean = false): Promise<any[]> {
+    if (!force && this.modelsCache && Date.now() - this.modelsCache.fetchedAt < MODELS_CACHE_TTL_MS) {
       return this.modelsCache.data;
     }
     const res = await fetch(`${BASE}/models`, { headers: this.headers() });

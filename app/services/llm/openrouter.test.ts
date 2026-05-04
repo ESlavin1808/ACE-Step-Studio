@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OpenRouterProvider } from './openrouter';
+import { OpenRouterClient } from './openrouterClient';
 import { llmStorage } from './storage';
 import { OpenRouterError, SongDraft } from './types';
 
@@ -14,6 +15,34 @@ function mockSseResponse(events: object[]): Response {
     },
   });
   return new Response(stream, { status: 200 });
+}
+
+const ALL_PARAMS = [
+  'temperature', 'top_p', 'top_k', 'min_p', 'frequency_penalty',
+  'presence_penalty', 'repetition_penalty', 'max_tokens', 'seed',
+  'response_format', 'structured_outputs', 'stream', 'reasoning',
+];
+
+function mockModelsResponse(modelId: string, supported: string[] = ALL_PARAMS): Response {
+  return new Response(
+    JSON.stringify({ data: [{ id: modelId, supported_parameters: supported }] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } }
+  );
+}
+
+/**
+ * URL-aware fetch mock: returns model meta for /models, the supplied SSE
+ * response for /chat/completions. Use for happy paths and any test that doesn't
+ * care about the listModels call's specific shape.
+ */
+function makeFetchMock(sse: Response, opts: { supported?: string[]; modelId?: string } = {}) {
+  return vi.fn().mockImplementation((url: string) => {
+    const u = String(url);
+    if (u.endsWith('/models')) {
+      return Promise.resolve(mockModelsResponse(opts.modelId || 'anthropic/claude-sonnet-4.5', opts.supported || ALL_PARAMS));
+    }
+    return Promise.resolve(sse);
+  });
 }
 
 function fullDraft(): SongDraft {
@@ -31,15 +60,27 @@ function fullDraft(): SongDraft {
 
 describe('OpenRouterProvider', () => {
   let originalFetch: typeof fetch;
+  let listModelsSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
     localStorage.clear();
     llmStorage.setOpenRouter({ apiKey: 'sk-or-test', model: 'anthropic/claude-sonnet-4.5' });
+    // Stub listModels so each test only needs to mock the chat-completions
+    // fetch path. Returns a single model whose supported_parameters cover
+    // every knob the provider knows about.
+    // Return meta entries for both the default test model and `'m'` (used in
+    // some tests that override storage). Both expose the full parameter set so
+    // the adaptive request builder sends every knob.
+    listModelsSpy = vi.spyOn(OpenRouterClient.prototype, 'listModels').mockResolvedValue([
+      { id: 'anthropic/claude-sonnet-4.5', supported_parameters: ALL_PARAMS },
+      { id: 'm', supported_parameters: ALL_PARAMS },
+    ]);
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    listModelsSpy.mockRestore();
   });
 
   describe('generate (happy path)', () => {
@@ -52,7 +93,7 @@ describe('OpenRouterProvider', () => {
         { choices: [{ delta: { content: fullText.slice(50) } }] },
         { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 80 } },
       ];
-      globalThis.fetch = vi.fn().mockResolvedValue(mockSseResponse(chunks));
+      globalThis.fetch = makeFetchMock(mockSseResponse(chunks));
       const provider = new OpenRouterProvider();
       const result = await provider.generate(
         { topic: 'rock', primary: 'lyrics', language: 'en', instrumental: false },
@@ -297,7 +338,7 @@ describe('OpenRouterProvider', () => {
         sseEvents.push({ choices: [{ delta: { content: fullText.slice(i, i + sliceSize) } }] });
       }
       sseEvents.push({ choices: [{ delta: {} }], usage: { prompt_tokens: 1, completion_tokens: 2 } });
-      globalThis.fetch = vi.fn().mockResolvedValue(mockSseResponse(sseEvents));
+      globalThis.fetch = makeFetchMock(mockSseResponse(sseEvents));
       const events: any[] = [];
       const provider = new OpenRouterProvider();
       await provider.generate(

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Eye, EyeOff, ChevronDown, ChevronRight, RotateCcw, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, ChevronDown, ChevronRight, RotateCcw, Loader2, RefreshCw } from 'lucide-react';
 import { llmStorage, DEFAULT_OR_CONFIG } from '../services/llm/storage';
 import { OpenRouterClient } from '../services/llm/openrouterClient';
 import { DEFAULT_GENERATE_PROMPT, DEFAULT_FORMAT_PROMPT } from '../services/llm/prompts';
@@ -24,15 +24,19 @@ export const LmProviderPanel: React.FC = () => {
   // Persist on cfg change
   useEffect(() => { llmStorage.setOpenRouter(cfg); }, [cfg]);
 
-  // Load models lazily when key is present
-  useEffect(() => {
+  // Load models lazily when key is present (uses the 1h in-memory cache)
+  const reloadModels = (force = false) => {
     if (!cfg.apiKey) { setModels([]); return; }
     setModelsLoading(true);
     new OpenRouterClient(cfg.apiKey)
-      .listModels()
+      .listModels(force)
       .then(setModels)
       .catch(() => setModels([]))
       .finally(() => setModelsLoading(false));
+  };
+  useEffect(() => {
+    reloadModels(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfg.apiKey]);
 
   // Click-outside to close picker
@@ -144,9 +148,21 @@ export const LmProviderPanel: React.FC = () => {
 
       {/* Model picker */}
       <div ref={pickerRef}>
-        <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-          {t('lmProvider.modelPicker.search') || 'Model'}
-        </label>
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+            {t('lmProvider.modelPicker.search') || 'Model'}
+          </label>
+          <button
+            type="button"
+            onClick={() => reloadModels(true)}
+            disabled={!cfg.apiKey || modelsLoading}
+            title="Refresh model list (bypasses 1h cache)"
+            className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-pink-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <RefreshCw size={10} className={modelsLoading ? 'animate-spin' : ''} />
+            {modelsLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
         <input
           value={modelPickerOpen ? modelQuery : cfg.model}
           onChange={e => { setModelQuery(e.target.value); setModelPickerOpen(true); }}
