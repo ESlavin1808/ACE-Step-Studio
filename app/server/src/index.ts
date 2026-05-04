@@ -62,7 +62,7 @@ app.use(helmet({
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdn.tailwindcss.com', 'https://esm.sh'],
       scriptSrcAttr: ["'none'"],
       styleSrc: ["'self'", 'https:', "'unsafe-inline'"],
-      connectSrc: ["'self'", 'https://esm.sh', 'http://localhost:*', 'ws://localhost:*'],
+      connectSrc: ["'self'", 'https://esm.sh', 'https://openrouter.ai', 'http://localhost:*', 'ws://localhost:*'],
       upgradeInsecureRequests: [],
     },
   },

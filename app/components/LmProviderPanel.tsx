@@ -81,7 +81,7 @@ export const LmProviderPanel: React.FC = () => {
   };
 
   const selectModel = (id: string) => {
-    setCfg({ ...cfg, model: id });
+    setCfg(c => ({ ...c, model: id }));
     llmStorage.pushRecentModel(id);
     setModelQuery('');
     setModelPickerOpen(false);
@@ -110,7 +110,7 @@ export const LmProviderPanel: React.FC = () => {
             <input
               type={showKey ? 'text' : 'password'}
               value={cfg.apiKey}
-              onChange={e => { setCfg({ ...cfg, apiKey: e.target.value }); setTestStatus('idle'); }}
+              onChange={e => { setCfg(c => ({ ...c, apiKey: e.target.value })); setTestStatus('idle'); }}
               placeholder={cfg.apiKey ? maskedKey : 'sk-or-...'}
               className="w-full bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1 text-xs pr-7"
             />
@@ -227,7 +227,7 @@ export const LmProviderPanel: React.FC = () => {
         min={0}
         max={2}
         step={0.05}
-        onChange={v => setCfg({ ...cfg, temperature: v })}
+        onChange={v => setCfg(c => ({ ...c, temperature: v }))}
         autoLabel=""
       />
       <EditableSlider
@@ -236,7 +236,7 @@ export const LmProviderPanel: React.FC = () => {
         min={0}
         max={1}
         step={0.01}
-        onChange={v => setCfg({ ...cfg, topP: v })}
+        onChange={v => setCfg(c => ({ ...c, topP: v }))}
         autoLabel=""
       />
       <EditableSlider
@@ -245,7 +245,7 @@ export const LmProviderPanel: React.FC = () => {
         min={0}
         max={200}
         step={1}
-        onChange={v => setCfg({ ...cfg, topK: v })}
+        onChange={v => setCfg(c => ({ ...c, topK: v }))}
         autoLabel="off"
       />
       <EditableSlider
@@ -254,7 +254,7 @@ export const LmProviderPanel: React.FC = () => {
         min={0}
         max={1}
         step={0.01}
-        onChange={v => setCfg({ ...cfg, minP: v })}
+        onChange={v => setCfg(c => ({ ...c, minP: v }))}
         autoLabel="off"
       />
       <EditableSlider
@@ -263,7 +263,7 @@ export const LmProviderPanel: React.FC = () => {
         min={-2}
         max={2}
         step={0.05}
-        onChange={v => setCfg({ ...cfg, frequencyPenalty: v })}
+        onChange={v => setCfg(c => ({ ...c, frequencyPenalty: v }))}
         autoLabel=""
       />
       <EditableSlider
@@ -272,7 +272,7 @@ export const LmProviderPanel: React.FC = () => {
         min={-2}
         max={2}
         step={0.05}
-        onChange={v => setCfg({ ...cfg, presencePenalty: v })}
+        onChange={v => setCfg(c => ({ ...c, presencePenalty: v }))}
         autoLabel=""
       />
       <EditableSlider
@@ -281,7 +281,7 @@ export const LmProviderPanel: React.FC = () => {
         min={0}
         max={2}
         step={0.05}
-        onChange={v => setCfg({ ...cfg, repetitionPenalty: v })}
+        onChange={v => setCfg(c => ({ ...c, repetitionPenalty: v }))}
         autoLabel=""
       />
 
@@ -298,12 +298,12 @@ export const LmProviderPanel: React.FC = () => {
           onChange={e => {
             const raw = e.target.value;
             if (raw === '') {
-              setCfg({ ...cfg, maxTokens: 1 });
+              setCfg(c => ({ ...c, maxTokens: 1 }));
               return;
             }
             const n = parseInt(raw, 10);
             if (Number.isFinite(n)) {
-              setCfg({ ...cfg, maxTokens: Math.max(1, Math.min(32000, n)) });
+              setCfg(c => ({ ...c, maxTokens: Math.max(1, Math.min(32000, n)) }));
             }
             // else: keep previous value
           }}
@@ -322,11 +322,11 @@ export const LmProviderPanel: React.FC = () => {
           onChange={e => {
             const raw = e.target.value;
             if (raw === '') {
-              setCfg({ ...cfg, seed: null });
+              setCfg(c => ({ ...c, seed: null }));
             } else {
               const n = parseInt(raw, 10);
               if (Number.isFinite(n)) {
-                setCfg({ ...cfg, seed: n });
+                setCfg(c => ({ ...c, seed: n }));
               }
               // else: keep previous value (don't update)
             }
@@ -351,7 +351,7 @@ export const LmProviderPanel: React.FC = () => {
           <div className="mt-1 space-y-1">
             <textarea
               value={valueGen}
-              onChange={e => setCfg({ ...cfg, systemPromptGenerate: e.target.value })}
+              onChange={e => setCfg(c => ({ ...c, systemPromptGenerate: e.target.value }))}
               rows={20}
               className="w-full bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1 text-[11px] font-mono whitespace-pre"
               spellCheck={false}
@@ -365,7 +365,7 @@ export const LmProviderPanel: React.FC = () => {
               {cfg.systemPromptGenerate && (
                 <button
                   type="button"
-                  onClick={() => setCfg({ ...cfg, systemPromptGenerate: '' })}
+                  onClick={() => setCfg(c => ({ ...c, systemPromptGenerate: '' }))}
                   className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-pink-500 transition-colors"
                 >
                   <RotateCcw size={10} /> Reset to default
@@ -391,7 +391,7 @@ export const LmProviderPanel: React.FC = () => {
           <div className="mt-1 space-y-1">
             <textarea
               value={valueFmt}
-              onChange={e => setCfg({ ...cfg, systemPromptFormat: e.target.value })}
+              onChange={e => setCfg(c => ({ ...c, systemPromptFormat: e.target.value }))}
               rows={20}
               className="w-full bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1 text-[11px] font-mono whitespace-pre"
               spellCheck={false}
@@ -405,7 +405,7 @@ export const LmProviderPanel: React.FC = () => {
               {cfg.systemPromptFormat && (
                 <button
                   type="button"
-                  onClick={() => setCfg({ ...cfg, systemPromptFormat: '' })}
+                  onClick={() => setCfg(c => ({ ...c, systemPromptFormat: '' }))}
                   className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-pink-500 transition-colors"
                 >
                   <RotateCcw size={10} /> Reset to default
