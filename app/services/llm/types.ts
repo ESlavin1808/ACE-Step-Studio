@@ -6,6 +6,13 @@ export interface SongDraftInput {
   language: string;        // 'en', 'ru', 'zh', 'ja', 'ko', etc. — same values as today's vocalLanguage
   instrumental: boolean;
   durationSec?: number;    // user hint
+  /**
+   * If true, hint the OpenRouter model to use reasoning / extended thinking.
+   * Forwarded as `reasoning: { effort: 'medium' }` in the request body — honored
+   * by reasoning-capable models (Claude w/ extended thinking, GPT-5, DeepSeek-R1)
+   * and silently ignored by others.
+   */
+  thinking?: boolean;
 }
 
 export interface FormatInput {
@@ -18,6 +25,8 @@ export interface FormatInput {
   language: string;
   instrumental: boolean;
   primary: 'lyrics' | 'caption';
+  /** See SongDraftInput.thinking. */
+  thinking?: boolean;
 }
 
 export interface SongDraft {

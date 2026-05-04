@@ -40,7 +40,7 @@ describe('llmStorage', () => {
       expect(DEFAULT_OR_CONFIG.seed).toBe(null);
       expect(DEFAULT_OR_CONFIG.systemPromptGenerate).toBe('');
       expect(DEFAULT_OR_CONFIG.systemPromptFormat).toBe('');
-      expect(DEFAULT_OR_CONFIG.model).toMatch(/\//); // e.g. 'anthropic/claude-...'
+      expect(DEFAULT_OR_CONFIG.model).toBe(''); // user picks from live OpenRouter list — no hardcoded default
     });
 
     it('merges partial updates without losing other fields', () => {

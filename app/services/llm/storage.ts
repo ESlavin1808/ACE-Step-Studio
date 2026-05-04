@@ -9,7 +9,9 @@ const KEYS = {
 
 export const DEFAULT_OR_CONFIG: OpenRouterConfig = {
   apiKey: '',
-  model: 'anthropic/claude-sonnet-4.5',
+  // No hardcoded default — user picks from the live list returned by
+  // OpenRouterClient.listModels() (https://openrouter.ai/api/v1/models).
+  model: '',
   temperature: 0.9,
   topP: 1.0,
   topK: 0,

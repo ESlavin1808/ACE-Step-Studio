@@ -161,9 +161,14 @@ export const LmProviderPanel: React.FC = () => {
               setModelQuery('');
             }
           }}
-          placeholder={modelsLoading ? 'Loading…' : 'anthropic/claude-...'}
-          className="w-full mt-1 bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1 text-xs"
+          placeholder={modelsLoading ? 'Loading…' : 'Pick a model from the list…'}
+          className={`w-full mt-1 bg-white dark:bg-black/40 border rounded px-2 py-1 text-xs ${!cfg.model ? 'border-amber-500/60' : 'border-zinc-200 dark:border-white/10'}`}
         />
+        {!cfg.model && cfg.apiKey && !modelsLoading && (
+          <p className="text-[10px] text-amber-600 dark:text-amber-500 mt-1">
+            Pick a model — the list is fetched live from openrouter.ai/api/v1/models.
+          </p>
+        )}
         {modelPickerOpen && (
           <div className="mt-1 max-h-64 overflow-y-auto border border-zinc-200 dark:border-white/10 rounded bg-white dark:bg-zinc-900">
             {recentModels.length > 0 && (

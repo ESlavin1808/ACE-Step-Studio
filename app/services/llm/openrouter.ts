@@ -43,23 +43,27 @@ export class OpenRouterProvider {
   generate(input: SongDraftInput, opts: RunOpts): Promise<SongDraft> {
     const cfg = llmStorage.getOpenRouter();
     const messages = buildGenerate(input, cfg.systemPromptGenerate);
-    return this.runStreamed(messages, opts);
+    return this.runStreamed(messages, opts, 0, { thinking: !!input.thinking });
   }
 
   format(input: FormatInput, opts: RunOpts): Promise<SongDraft> {
     const cfg = llmStorage.getOpenRouter();
     const messages = buildFormat(input, cfg.systemPromptFormat);
-    return this.runStreamed(messages, opts);
+    return this.runStreamed(messages, opts, 0, { thinking: !!input.thinking });
   }
 
   private async runStreamed(
     messages: ChatMessage[],
     opts: RunOpts,
     attempt: number = 0,
+    extra: { thinking: boolean } = { thinking: false },
   ): Promise<SongDraft> {
     const cfg = llmStorage.getOpenRouter();
     if (!cfg.apiKey) {
       throw new OpenRouterError('KEY_MISSING', 'OpenRouter API key not set');
+    }
+    if (!cfg.model) {
+      throw new OpenRouterError('MODEL_UNAVAILABLE', 'OpenRouter model not selected — pick one from the list');
     }
     const client = new OpenRouterClient(cfg.apiKey);
 
@@ -81,6 +85,10 @@ export class OpenRouterProvider {
     if (cfg.topK > 0) reqBody.top_k = cfg.topK;
     if (cfg.minP > 0) reqBody.min_p = cfg.minP;
     if (cfg.seed !== null) reqBody.seed = cfg.seed;
+    // Forward reasoning hint when user enabled "Thinking" (honored by reasoning-capable
+    // OpenRouter models like Claude extended-thinking, GPT-5, DeepSeek-R1; ignored
+    // by others). See https://openrouter.ai/docs#reasoning-tokens
+    if (extra.thinking) reqBody.reasoning = { effort: 'medium' };
 
     let res: Response;
     try {
@@ -94,7 +102,7 @@ export class OpenRouterProvider {
             content: `Match this exact JSON shape:\n${JSON.stringify(SCHEMA.schema)}`,
           },
         ];
-        return this.runStreamed(fallbackMessages, opts, 1);
+        return this.runStreamed(fallbackMessages, opts, 1, extra);
       }
       throw e;
     }
@@ -137,7 +145,7 @@ export class OpenRouterProvider {
             ...messages,
             { role: 'user', content: 'Return JSON only, matching the schema, no prose.' },
           ];
-          return this.runStreamed(fallbackMessages, opts, 1);
+          return this.runStreamed(fallbackMessages, opts, 1, extra);
         }
         throw new OpenRouterError('SCHEMA_NONCOMPLIANT', 'model returned non-JSON content');
       }
@@ -165,7 +173,7 @@ export class OpenRouterProvider {
           ...messages,
           { role: 'user', content: 'Return JSON only, no prose.' },
         ];
-        return this.runStreamed(fallbackMessages, opts, 1);
+        return this.runStreamed(fallbackMessages, opts, 1, extra);
       }
       throw new OpenRouterError('INVALID_JSON', 'failed to parse model response after retry');
     }
@@ -178,7 +186,7 @@ export class OpenRouterProvider {
             ...messages,
             { role: 'user', content: 'Return JSON only, no prose. Include all required fields.' },
           ];
-          return this.runStreamed(fallbackMessages, opts, 1);
+          return this.runStreamed(fallbackMessages, opts, 1, extra);
         }
         throw new OpenRouterError('INVALID_JSON', `missing field: ${field}`);
       }

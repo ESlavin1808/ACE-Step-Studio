@@ -1069,6 +1069,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         language: vocalLanguage || 'en',
         instrumental: target === 'style' ? instrumental : false,
         durationSec: duration > 0 ? duration : undefined,
+        thinking,
       });
       return;
     }
@@ -1122,6 +1123,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         language: vocalLanguage || 'en',
         instrumental: target === 'style' ? instrumental : false,
         primary,
+        thinking,
       });
       return;
     }
@@ -3004,24 +3006,24 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               <p className="text-[10px] text-zinc-500">{randomSeed ? t('randomSeedRecommended') : t('fixedSeedReproducible')}</p>
             </div>
 
-            {/* Thinking Toggle */}
-            <div className="flex items-center justify-between py-2 border-t border-zinc-100 dark:border-white/5">
-              <span className={`text-xs font-medium ${loraLoaded || !activeLmModel ? 'text-zinc-400 dark:text-zinc-600' : 'text-zinc-600 dark:text-zinc-400'}`} title={t('hintThinkingCot') || 'Lets the lyric model reason about structure and metadata. Slightly slower.'}>
-                {t('thinkingCot')}
-                {!activeLmModel && (
-                  <span className="text-[10px] text-zinc-500 ml-2" title="Requires local LM — run with run.bat">
-                    no LM
-                  </span>
-                )}
-              </span>
-              <button
-                onClick={() => activeLmModel && !loraLoaded && setThinking(!thinking)}
-                disabled={loraLoaded || !activeLmModel}
-                className={`w-10 h-5 rounded-full flex items-center transition-colors duration-200 px-0.5 border border-zinc-200 dark:border-white/5 ${thinking ? 'bg-pink-600' : 'bg-zinc-300 dark:bg-black/40'} ${loraLoaded || !activeLmModel ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-              >
-                <div className={`w-4 h-4 rounded-full bg-white transform transition-transform duration-200 shadow-sm ${thinking ? 'translate-x-5' : 'translate-x-0'}`} />
-              </button>
-            </div>
+            {/* Thinking / Reasoning Toggle —
+                  • Local LM mode: enables chain-of-thought caption/lyrics generation.
+                  • OpenRouter mode: forwards reasoning hint to OR model (honored by reasoning models like Claude extended-thinking, GPT-5, DeepSeek-R1; ignored by others).
+            */}
+            {(useOpenRouter || activeLmModel !== '') && (
+              <div className="flex items-center justify-between py-2 border-t border-zinc-100 dark:border-white/5">
+                <span className={`text-xs font-medium ${loraLoaded ? 'text-zinc-400 dark:text-zinc-600' : 'text-zinc-600 dark:text-zinc-400'}`} title={useOpenRouter ? 'Forwards reasoning hint to OpenRouter (honored by reasoning-capable models, ignored by others).' : (t('hintThinkingCot') || 'Lets the lyric model reason about structure and metadata. Slightly slower.')}>
+                  {t('thinkingCot')}
+                </span>
+                <button
+                  onClick={() => !loraLoaded && setThinking(!thinking)}
+                  disabled={loraLoaded}
+                  className={`w-10 h-5 rounded-full flex items-center transition-colors duration-200 px-0.5 border border-zinc-200 dark:border-white/5 ${thinking ? 'bg-pink-600' : 'bg-zinc-300 dark:bg-black/40'} ${loraLoaded ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <div className={`w-4 h-4 rounded-full bg-white transform transition-transform duration-200 shadow-sm ${thinking ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+              </div>
+            )}
 
             {/* Shift */}
             <EditableSlider
@@ -3046,7 +3048,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
             )}
 
             {/* LM Parameters — only relevant when a local LM is actually loaded */}
-            {activeLmModel !== '' && (
+            {!useOpenRouter && activeLmModel !== '' &&(
               <button
                 onClick={() => setShowLmParams(!showLmParams)}
                 className="w-full flex items-center justify-between px-4 py-3 bg-white/60 dark:bg-black/20 rounded-xl border border-zinc-200/70 dark:border-white/10 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors"
@@ -3062,7 +3064,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               </button>
             )}
 
-            {activeLmModel !== '' && showLmParams && (
+            {!useOpenRouter && activeLmModel !== '' &&showLmParams && (
               <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 p-4 space-y-4">
                 {/* LM Temperature */}
                 <EditableSlider
