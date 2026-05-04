@@ -129,6 +129,7 @@ function transformSongs(songs: Song[]): Song[] {
       lmBackend: (song as any).lm_backend || (song as any).lmBackend,
       generationTime: (song as any).generation_time || (song as any).generationTime,
       lrcContent: (song as any).lrc_content || (song as any).lrcContent,
+      openrouterModel: (song as any).openrouter_model || (song as any).openrouterModel,
     };
   });
 }
@@ -163,6 +164,7 @@ export const songsApi = {
       lmBackend: s.lm_backend || s.lmBackend,
       generationTime: s.generation_time || s.generationTime,
       lrcContent: s.lrc_content || s.lrcContent,
+      openrouterModel: s.openrouter_model || s.openrouterModel,
     }};
   },
 
@@ -182,6 +184,7 @@ export const songsApi = {
         lmBackend: s.lm_backend || s.lmBackend,
         generationTime: s.generation_time || s.generationTime,
         lrcContent: s.lrc_content || s.lrcContent,
+        openrouterModel: s.openrouter_model || s.openrouterModel,
       }
     };
   },
@@ -225,6 +228,7 @@ export const songsApi = {
         lmBackend: s.lm_backend || s.lmBackend,
         generationTime: s.generation_time || s.generationTime,
         lrcContent: s.lrc_content || s.lrcContent,
+        openrouterModel: s.openrouter_model || s.openrouterModel,
         isGenerating: s.isGenerating,
         queuePosition: s.queuePosition,
         bpm: s.bpm,
