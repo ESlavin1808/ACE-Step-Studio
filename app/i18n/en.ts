@@ -280,6 +280,7 @@ export const en = {
     repaintConservative: 'Conservative',
     repaintBalanced: 'Balanced',
     repaintAggressive: 'Aggressive',
+    repaintMostNatural: 'Most Natural',
     repaintStrengthLabel: 'Repaint Strength',
     applyLmSettings: 'Apply LM Settings (restart pipeline)',
     applyingLmSettings: 'Restarting pipeline',

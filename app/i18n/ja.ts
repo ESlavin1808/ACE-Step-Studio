@@ -278,6 +278,7 @@ export const ja = {
   repaintConservative: '控えめ',
   repaintBalanced: 'バランス',
   repaintAggressive: '積極的',
+  repaintMostNatural: '最も自然',
   repaintStrengthLabel: 'リペイント強度',
   applyLmSettings: 'LM設定を適用（パイプライン再起動）',
   applyingLmSettings: 'パイプライン再起動中',

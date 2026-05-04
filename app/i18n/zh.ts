@@ -278,6 +278,7 @@ export const zh = {
     repaintConservative: '保守',
     repaintBalanced: '平衡',
     repaintAggressive: '激进',
+    repaintMostNatural: '最自然',
     repaintStrengthLabel: '重绘强度',
     applyLmSettings: '应用 LM 设置（重启管线）',
     applyingLmSettings: '正在重启管线',

@@ -278,6 +278,7 @@ export const ko = {
     repaintConservative: '보수적',
     repaintBalanced: '균형',
     repaintAggressive: '공격적',
+    repaintMostNatural: '가장 자연스러운',
     repaintStrengthLabel: '리페인트 강도',
     applyLmSettings: 'LM 설정 적용 (파이프라인 재시작)',
     applyingLmSettings: '파이프라인 재시작 중',

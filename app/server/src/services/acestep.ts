@@ -401,7 +401,7 @@ export interface GenerationParams {
   fadeOutDuration?: number;
   latentShift?: number;
   latentRescale?: number;
-  repaintMode?: 'conservative' | 'balanced' | 'aggressive';
+  repaintMode?: 'conservative' | 'balanced' | 'aggressive' | 'most_natural';
   repaintStrength?: number;
 
   // Model selection

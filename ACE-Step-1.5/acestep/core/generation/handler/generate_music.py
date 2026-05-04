@@ -33,7 +33,11 @@ def _resolve_repaint_config(
     Higher *strength* means more aggressive repainting (less source preservation).
 
     Args:
-        mode: One of ``"conservative"``, ``"balanced"``, or ``"aggressive"``.
+        mode: One of ``"conservative"``, ``"balanced"``, ``"aggressive"``, or
+            ``"most_natural"``.  ``"most_natural"`` behaves like conservative
+            (max preservation) but is intended to be used by our Express layer
+            with src_audio auto-substituted to the user's last generated track,
+            for the smoothest iterative-refinement flow.
         strength: 0.0 = conservative (max preservation), 1.0 = aggressive
             (pure diffusion).  Only effective in balanced mode.
 
@@ -43,7 +47,7 @@ def _resolve_repaint_config(
     strength = max(0.0, min(1.0, strength))
     if mode == "aggressive":
         return 0.0, 0, 0.0
-    if mode == "conservative":
+    if mode == "conservative" or mode == "most_natural":
         return 1.0, 25, 0.05
     inv = 1.0 - strength
     return inv, round(25 * inv), 0.05 * inv

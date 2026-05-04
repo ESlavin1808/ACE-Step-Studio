@@ -263,7 +263,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [mp3SampleRate, setMp3SampleRate] = useState(48000);
   const [fadeInDuration, setFadeInDuration] = useState(0.0);
   const [fadeOutDuration, setFadeOutDuration] = useState(0.0);
-  const [repaintMode, setRepaintMode] = useState<'conservative' | 'balanced' | 'aggressive'>('balanced');
+  const [repaintMode, setRepaintMode] = useState<'conservative' | 'balanced' | 'aggressive' | 'most_natural'>('balanced');
   const [repaintStrength, setRepaintStrength] = useState(0.5);
 
   const [maxDurationWithLm, setMaxDurationWithLm] = useState(240);
@@ -3031,12 +3031,13 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                   <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('repaintModeLabel') || 'Repaint Mode'}</label>
                   <select
                     value={repaintMode}
-                    onChange={(e) => setRepaintMode(e.target.value as 'conservative' | 'balanced' | 'aggressive')}
+                    onChange={(e) => setRepaintMode(e.target.value as 'conservative' | 'balanced' | 'aggressive' | 'most_natural')}
                     className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 transition-colors cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800"
                   >
                     <option value="conservative">{t('repaintConservative') || 'Conservative'}</option>
                     <option value="balanced">{t('repaintBalanced') || 'Balanced'}</option>
                     <option value="aggressive">{t('repaintAggressive') || 'Aggressive'}</option>
+                    <option value="most_natural">{t('repaintMostNatural') || 'Most Natural'}</option>
                   </select>
                 </div>
                 <div className="space-y-1.5">

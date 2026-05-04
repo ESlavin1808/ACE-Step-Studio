@@ -282,6 +282,7 @@ export const ru = {
     repaintConservative: 'Консервативный',
     repaintBalanced: 'Сбалансированный',
     repaintAggressive: 'Агрессивный',
+    repaintMostNatural: 'Максимально натуральный',
     repaintStrengthLabel: 'Сила Repaint',
     applyLmSettings: 'Применить настройки LM (перезапуск)',
     applyingLmSettings: 'Перезапуск pipeline',
