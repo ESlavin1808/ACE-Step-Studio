@@ -251,6 +251,14 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   // Retake — variance-preserving blend with an independent noise draw
   const [retakeSeed, setRetakeSeed] = useState('-1');
   const [retakeVariance, setRetakeVariance] = useState(0.0);
+  // Flow-edit (#1156) — text-edit overlay morphing src toward target prompt/lyrics.
+  // Works on text2music + cover + cover-nofsq tasks only.
+  const [flowEditMorph, setFlowEditMorph] = useState(false);
+  const [flowEditSourceCaption, setFlowEditSourceCaption] = useState('');
+  const [flowEditSourceLyrics, setFlowEditSourceLyrics] = useState('');
+  const [flowEditNMin, setFlowEditNMin] = useState(0.0);
+  const [flowEditNMax, setFlowEditNMax] = useState(1.0);
+  const [flowEditNAvg, setFlowEditNAvg] = useState(1);
   const [mp3Bitrate, setMp3Bitrate] = useState('128k');
   const [mp3SampleRate, setMp3SampleRate] = useState(48000);
   const [fadeInDuration, setFadeInDuration] = useState(0.0);
@@ -282,6 +290,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         guidanceScale, thinking, enhance, getLrc, audioFormat, inferenceSteps, inferMethod,
         shift, lmTemperature, lmCfgScale, lmTopK, lmTopP, lmNegativePrompt, useAdg, samplerMode, schedulerType,
         dcwEnabled, dcwMode, dcwScaler, dcwHighScaler, dcwWavelet, retakeSeed, retakeVariance,
+        flowEditMorph, flowEditSourceCaption, flowEditSourceLyrics, flowEditNMin, flowEditNMax, flowEditNAvg,
         mp3Bitrate, mp3SampleRate, ...overrides,
       };
       settingsApi.save(settings, token).catch(() => {});
@@ -290,6 +299,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
       guidanceScale, thinking, enhance, getLrc, audioFormat, inferenceSteps, inferMethod,
       shift, lmTemperature, lmCfgScale, lmTopK, lmTopP, lmNegativePrompt, useAdg, samplerMode, schedulerType,
       dcwEnabled, dcwMode, dcwScaler, dcwHighScaler, dcwWavelet, retakeSeed, retakeVariance,
+      flowEditMorph, flowEditSourceCaption, flowEditSourceLyrics, flowEditNMin, flowEditNMax, flowEditNAvg,
       mp3Bitrate, mp3SampleRate]);
 
   // Auto-save when any setting changes
@@ -344,6 +354,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
       if (s.dcwWavelet !== undefined) setDcwWavelet(s.dcwWavelet as string);
       if (s.retakeSeed !== undefined) setRetakeSeed(String(s.retakeSeed));
       if (s.retakeVariance !== undefined) setRetakeVariance(Number(s.retakeVariance));
+      if (s.flowEditMorph !== undefined) setFlowEditMorph(s.flowEditMorph as boolean);
+      if (s.flowEditSourceCaption !== undefined) setFlowEditSourceCaption(s.flowEditSourceCaption as string);
+      if (s.flowEditSourceLyrics !== undefined) setFlowEditSourceLyrics(s.flowEditSourceLyrics as string);
+      if (s.flowEditNMin !== undefined) setFlowEditNMin(Number(s.flowEditNMin));
+      if (s.flowEditNMax !== undefined) setFlowEditNMax(Number(s.flowEditNMax));
+      if (s.flowEditNAvg !== undefined) setFlowEditNAvg(Number(s.flowEditNAvg));
       if (s.mp3Bitrate !== undefined) setMp3Bitrate(s.mp3Bitrate as string);
       if (s.mp3SampleRate !== undefined) setMp3SampleRate(s.mp3SampleRate as number);
       settingsLoadedRef.current = true;
@@ -1384,6 +1400,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         dcwWavelet,
         retakeSeed: Number(retakeSeed) || -1,
         retakeVariance,
+        flowEditMorph,
+        flowEditSourceCaption,
+        flowEditSourceLyrics,
+        flowEditNMin,
+        flowEditNMax,
+        flowEditNAvg,
         mp3Bitrate,
         mp3SampleRate,
         fadeInDuration: fadeInDuration > 0 ? fadeInDuration : undefined,
@@ -2591,6 +2613,88 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Flow-edit (#1156) — text-edit overlay morphing src toward target prompt/lyrics.
+                Works only on text2music + cover + cover-nofsq tasks. */}
+            {(['text2music', 'cover', 'cover-nofsq'].includes(taskType)) && (
+              <div className="rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-50/50 dark:bg-black/10 p-3 space-y-2">
+                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={flowEditMorph}
+                    onChange={(e) => setFlowEditMorph(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded accent-pink-500"
+                  />
+                  {t('flowEditLabel') || 'Flow-edit (morph from source)'}
+                </label>
+                {flowEditMorph && (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                        {t('flowEditSourceCaptionLabel') || 'Source caption (original prompt)'}
+                      </label>
+                      <textarea
+                        value={flowEditSourceCaption}
+                        onChange={(e) => setFlowEditSourceCaption(e.target.value)}
+                        rows={2}
+                        placeholder={t('flowEditSourceCaptionPlaceholder') || 'Description of the source song to morph FROM'}
+                        className="w-full bg-white dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 resize-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                        {t('flowEditSourceLyricsLabel') || 'Source lyrics (original)'}
+                      </label>
+                      <textarea
+                        value={flowEditSourceLyrics}
+                        onChange={(e) => setFlowEditSourceLyrics(e.target.value)}
+                        rows={2}
+                        placeholder={t('flowEditSourceLyricsPlaceholder') || '[Verse] original lyrics...'}
+                        className="w-full bg-white dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 resize-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[11px] text-zinc-600 dark:text-zinc-400 flex justify-between">
+                          <span>{t('flowEditNMinLabel') || 'n_min'}</span>
+                          <span className="text-zinc-500">{flowEditNMin.toFixed(2)}</span>
+                        </label>
+                        <input
+                          type="range" min={0} max={1} step={0.05}
+                          value={flowEditNMin}
+                          onChange={(e) => setFlowEditNMin(Number(e.target.value))}
+                          className="w-full accent-pink-500"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[11px] text-zinc-600 dark:text-zinc-400 flex justify-between">
+                          <span>{t('flowEditNMaxLabel') || 'n_max'}</span>
+                          <span className="text-zinc-500">{flowEditNMax.toFixed(2)}</span>
+                        </label>
+                        <input
+                          type="range" min={0} max={1} step={0.05}
+                          value={flowEditNMax}
+                          onChange={(e) => setFlowEditNMax(Number(e.target.value))}
+                          className="w-full accent-pink-500"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[11px] text-zinc-600 dark:text-zinc-400 flex justify-between">
+                          <span>{t('flowEditNAvgLabel') || 'n_avg'}</span>
+                          <span className="text-zinc-500">{flowEditNAvg}</span>
+                        </label>
+                        <input
+                          type="number" min={1} max={5} step={1}
+                          value={flowEditNAvg}
+                          onChange={(e) => setFlowEditNAvg(Math.max(1, Math.min(5, parseInt(e.target.value) || 1)))}
+                          className="w-full bg-white dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500"
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* MP3 Quality (only when mp3 format selected) */}
             {audioFormat === 'mp3' && (

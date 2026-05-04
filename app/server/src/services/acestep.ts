@@ -243,13 +243,13 @@ async function buildGradioArgs(params: GenerationParams): Promise<Record<string,
     // Retake — variance-preserving blend with an independent noise draw
     retake_variance: params.retakeVariance ?? 0.0,
     retake_seed: params.retakeSeed ?? -1,
-    // Flow-edit (advanced; not exposed in our UI yet, defaults are no-op)
-    flow_edit_morph: false,
-    flow_edit_source_caption: '',
-    flow_edit_source_lyrics: '',
-    flow_edit_n_min: 0.0,
-    flow_edit_n_max: 1.0,
-    flow_edit_n_avg: 1,
+    // Flow-edit (#1156) — text-edit overlay morphing src toward target
+    flow_edit_morph: params.flowEditMorph ?? false,
+    flow_edit_source_caption: params.flowEditSourceCaption ?? '',
+    flow_edit_source_lyrics: params.flowEditSourceLyrics ?? '',
+    flow_edit_n_min: params.flowEditNMin ?? 0.0,
+    flow_edit_n_max: params.flowEditNMax ?? 1.0,
+    flow_edit_n_avg: params.flowEditNAvg ?? 1,
     autogen_checkbox: params.autogen ?? false,
   };
 }
@@ -384,6 +384,14 @@ export interface GenerationParams {
   // Retake — variance-preserving blend with an independent noise draw
   retakeSeed?: number;
   retakeVariance?: number;
+
+  // Flow-edit (#1156) — text-edit overlay morphing src toward target prompt/lyrics
+  flowEditMorph?: boolean;
+  flowEditSourceCaption?: string;
+  flowEditSourceLyrics?: string;
+  flowEditNMin?: number;
+  flowEditNMax?: number;
+  flowEditNAvg?: number;
 
   mp3Bitrate?: string;
   mp3SampleRate?: number;
