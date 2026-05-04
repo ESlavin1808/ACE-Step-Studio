@@ -213,6 +213,9 @@ interface GenerateBody {
 
   // Model selection
   ditModel?: string;
+
+  // OpenRouter
+  openrouterModel?: string;
 }
 
 router.post('/upload-audio', authMiddleware, (req: AuthenticatedRequest, res: Response, next: Function) => {
@@ -343,6 +346,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       repaintMode,
       repaintStrength,
       ditModel,
+      openrouterModel,
     } = req.body as GenerateBody;
 
     if (!customMode && !songDescription) {
@@ -427,6 +431,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       repaintMode,
       repaintStrength,
       ditModel,
+      openrouterModel,
     };
 
     // Create job record in database
@@ -553,8 +558,8 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                 await pool.query(
                   `INSERT INTO songs (id, user_id, title, lyrics, style, caption, audio_url,
                                       duration, bpm, key_scale, time_signature, tags, is_public, generation_params,
-                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, openrouter_model, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
                   [
                     songId,
                     req.user!.id,
@@ -574,6 +579,7 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     activeLmBackend || params.lmBackend || null,
                     aceStatus.result.generationTime || null,
                     trackLrc,
+                    params.openrouterModel || null,
                   ]
                 );
 
@@ -585,8 +591,8 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                 await pool.query(
                   `INSERT INTO songs (id, user_id, title, lyrics, style, caption, audio_url,
                                       duration, bpm, key_scale, time_signature, tags, is_public, generation_params,
-                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, openrouter_model, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
                   [
                     songId,
                     req.user!.id,
@@ -606,6 +612,7 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     activeLmBackend || params.lmBackend || null,
                     aceStatus.result.generationTime || null,
                     trackLrcFallback,
+                    params.openrouterModel || null,
                   ]
                 );
                 localPaths.push(audioUrl);

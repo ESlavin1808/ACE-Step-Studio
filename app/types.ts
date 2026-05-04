@@ -23,6 +23,7 @@ export interface Song {
   ditModel?: string;
   lmModel?: string;
   lmBackend?: string;
+  openrouterModel?: string | null;
   generationTime?: number;
   lrcContent?: string;
   bpm?: number;
@@ -145,6 +146,9 @@ export interface GenerationParams {
   latentRescale?: number;
   repaintMode?: 'conservative' | 'balanced' | 'aggressive';
   repaintStrength?: number;
+
+  // OpenRouter
+  openrouterModel?: string;
 }
 
 export interface PlayerState {

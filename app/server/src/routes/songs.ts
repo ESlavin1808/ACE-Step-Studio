@@ -107,7 +107,7 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Response)
     const result = await pool.query(
       `SELECT s.id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
               s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.is_public, 
-              s.like_count, s.view_count, s.user_id, s.created_at, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content,
+              s.like_count, s.view_count, s.user_id, s.created_at, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content, s.openrouter_model,
               COALESCE(u.username, 'Anonymous') as creator
        FROM songs s
        LEFT JOIN users u ON s.user_id = u.id
@@ -137,7 +137,7 @@ router.get('/public/featured', optionalAuthMiddleware, async (_req: Authenticate
     const result = await pool.query(
       `SELECT s.id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
               s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.like_count, s.view_count, s.created_at, s.user_id,
-              COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time
+              COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.openrouter_model
        FROM songs s
        LEFT JOIN users u ON s.user_id = u.id
        ORDER BY RANDOM()
@@ -184,7 +184,7 @@ router.get('/public', optionalAuthMiddleware, async (req: AuthenticatedRequest, 
     const result = await pool.query(
       `SELECT s.id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
               s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.like_count, s.created_at,
-              COALESCE(u.username, 'Anonymous') as creator, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time
+              COALESCE(u.username, 'Anonymous') as creator, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.openrouter_model
        FROM songs s
        LEFT JOIN users u ON s.user_id = u.id
        WHERE s.is_public = true
@@ -213,7 +213,7 @@ router.get('/:id', optionalAuthMiddleware, async (req: AuthenticatedRequest, res
     const result = await pool.query(
       `SELECT s.id, s.user_id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
               s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.is_public, s.like_count, s.view_count, s.created_at,
-              COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time
+              COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.openrouter_model
        FROM songs s
        LEFT JOIN users u ON s.user_id = u.id
        WHERE s.id = $1`,
@@ -252,7 +252,7 @@ router.get('/:id/full', optionalAuthMiddleware, async (req: AuthenticatedRequest
       pool.query(
         `SELECT s.id, s.user_id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
                 s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.is_public,
-                s.like_count, s.view_count, s.created_at, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content,
+                s.like_count, s.view_count, s.created_at, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content, s.openrouter_model,
                 COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar
          FROM songs s
          LEFT JOIN users u ON s.user_id = u.id
@@ -503,7 +503,7 @@ router.get('/liked/list', authMiddleware, async (req: AuthenticatedRequest, res:
     const result = await pool.query(
       `SELECT s.id, s.title, s.lyrics, s.style, s.cover_url, s.audio_url,
               s.duration, s.tags, s.like_count, s.created_at, s.is_public,
-              COALESCE(u.username, 'Anonymous') as creator, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time
+              COALESCE(u.username, 'Anonymous') as creator, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.openrouter_model
        FROM liked_songs ls
        JOIN songs s ON ls.song_id = s.id
        LEFT JOIN users u ON s.user_id = u.id
