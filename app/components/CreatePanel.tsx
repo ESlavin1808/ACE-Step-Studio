@@ -2901,45 +2901,48 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               </div>
             </div>
 
-            {/* LM Backend */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmBackendLabel') || 'LM Backend'}</label>
-              <select
-                value={lmBackend}
-                onChange={e => { setLmBackend(e.target.value as 'pt' | 'vllm'); lmEditingRef.current = true; }}
-                className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
-              >
-                <option value="vllm">{t('lmBackendVllm') || 'VLLM (~9.2 GB VRAM)'}</option>
-                <option value="pt">{t('lmBackendPt') || 'PT (~1.6 GB VRAM)'}</option>
-              </select>
-              <p className="text-[10px] text-zinc-500">{t('lmBackendHint') || 'vLLM uses CUDA graphs for faster LLM inference'}</p>
-            </div>
-
             {/* OpenRouter toggle — selects between local LM and remote OpenRouter provider */}
             <UseOpenRouterToggle value={useOpenRouter} onChange={setUseOpenRouter} />
 
-            {/* LM Model — local LM only */}
+            {/* Local LM controls — hidden entirely when OpenRouter is active */}
             {!useOpenRouter && (
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmModelLabel')}</label>
-                <select
-                  value={lmModel}
-                  onChange={(e) => { setLmModel(e.target.value); lmEditingRef.current = true; }}
-                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
-                >
-                  <option value="acestep-5Hz-lm-0.6B">{t('lmModel06B')}</option>
-                  <option value="acestep-5Hz-lm-1.7B">{t('lmModel17B')}</option>
-                  <option value="acestep-5Hz-lm-4B">{t('lmModel4B')}</option>
-                </select>
-                <p className="text-[10px] text-zinc-500">{t('lmModelHint')}</p>
-              </div>
+              <>
+                {/* LM Backend */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmBackendLabel') || 'LM Backend'}</label>
+                  <select
+                    value={lmBackend}
+                    onChange={e => { setLmBackend(e.target.value as 'pt' | 'vllm'); lmEditingRef.current = true; }}
+                    className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
+                  >
+                    <option value="vllm">{t('lmBackendVllm') || 'VLLM (~9.2 GB VRAM)'}</option>
+                    <option value="pt">{t('lmBackendPt') || 'PT (~1.6 GB VRAM)'}</option>
+                  </select>
+                  <p className="text-[10px] text-zinc-500">{t('lmBackendHint') || 'vLLM uses CUDA graphs for faster LLM inference'}</p>
+                </div>
+
+                {/* LM Model */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmModelLabel')}</label>
+                  <select
+                    value={lmModel}
+                    onChange={(e) => { setLmModel(e.target.value); lmEditingRef.current = true; }}
+                    className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
+                  >
+                    <option value="acestep-5Hz-lm-0.6B">{t('lmModel06B')}</option>
+                    <option value="acestep-5Hz-lm-1.7B">{t('lmModel17B')}</option>
+                    <option value="acestep-5Hz-lm-4B">{t('lmModel4B')}</option>
+                  </select>
+                  <p className="text-[10px] text-zinc-500">{t('lmModelHint')}</p>
+                </div>
+              </>
             )}
 
             {/* OpenRouter provider config — shown when toggle is ON */}
             {useOpenRouter && <LmProviderPanel />}
 
-            {/* Apply LM Settings button */}
-            <button
+            {/* Apply LM Settings button — only relevant when controlling local LM */}
+            {!useOpenRouter && <button
               type="button"
               disabled={!!modelSwitchStatus || !lmModel}
               onClick={async () => {
@@ -2971,7 +2974,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               ) : (
                 t('applyLmSettings') || 'Apply LM Settings (restart pipeline)'
               )}
-            </button>
+            </button>}
 
             {/* Seed */}
             <div className="space-y-2">
