@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "start": "cd server && npx tsx src/index.ts & npm run dev",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.6",
