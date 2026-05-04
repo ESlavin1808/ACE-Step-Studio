@@ -41,6 +41,7 @@ export const LmProviderPanel: React.FC = () => {
     const onClick = (e: MouseEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
         setModelPickerOpen(false);
+        setModelQuery('');
       }
     };
     document.addEventListener('mousedown', onClick);
@@ -150,6 +151,16 @@ export const LmProviderPanel: React.FC = () => {
           value={modelPickerOpen ? modelQuery : cfg.model}
           onChange={e => { setModelQuery(e.target.value); setModelPickerOpen(true); }}
           onFocus={() => setModelPickerOpen(true)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && modelQuery.trim()) {
+              e.preventDefault();
+              selectModel(modelQuery.trim());
+            }
+            if (e.key === 'Escape') {
+              setModelPickerOpen(false);
+              setModelQuery('');
+            }
+          }}
           placeholder={modelsLoading ? 'Loading…' : 'anthropic/claude-...'}
           className="w-full mt-1 bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1 text-xs"
         />
@@ -279,7 +290,18 @@ export const LmProviderPanel: React.FC = () => {
           value={cfg.maxTokens}
           min={1}
           max={32000}
-          onChange={e => setCfg({ ...cfg, maxTokens: parseInt(e.target.value) || 0 })}
+          onChange={e => {
+            const raw = e.target.value;
+            if (raw === '') {
+              setCfg({ ...cfg, maxTokens: 1 });
+              return;
+            }
+            const n = parseInt(raw, 10);
+            if (Number.isFinite(n)) {
+              setCfg({ ...cfg, maxTokens: Math.max(1, Math.min(32000, n)) });
+            }
+            // else: keep previous value
+          }}
           className="w-full mt-1 bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1 text-xs"
         />
       </div>
@@ -294,7 +316,15 @@ export const LmProviderPanel: React.FC = () => {
           value={cfg.seed === null ? '' : cfg.seed}
           onChange={e => {
             const raw = e.target.value;
-            setCfg({ ...cfg, seed: raw === '' ? null : parseInt(raw) || 0 });
+            if (raw === '') {
+              setCfg({ ...cfg, seed: null });
+            } else {
+              const n = parseInt(raw, 10);
+              if (Number.isFinite(n)) {
+                setCfg({ ...cfg, seed: n });
+              }
+              // else: keep previous value (don't update)
+            }
           }}
           placeholder="random"
           className="w-full mt-1 bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1 text-xs"
