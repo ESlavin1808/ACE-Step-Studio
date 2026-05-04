@@ -112,6 +112,7 @@ export interface Song {
   lmBackend?: string;
   generationTime?: number;
   lrcContent?: string;
+  openrouterModel?: string;
   generation_params?: any;
 }
 
