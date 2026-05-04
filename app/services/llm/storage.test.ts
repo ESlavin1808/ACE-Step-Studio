@@ -38,7 +38,8 @@ describe('llmStorage', () => {
       expect(DEFAULT_OR_CONFIG.presencePenalty).toBe(0.0);
       expect(DEFAULT_OR_CONFIG.repetitionPenalty).toBe(1.0);
       expect(DEFAULT_OR_CONFIG.seed).toBe(null);
-      expect(DEFAULT_OR_CONFIG.systemPrompt).toBe('');
+      expect(DEFAULT_OR_CONFIG.systemPromptGenerate).toBe('');
+      expect(DEFAULT_OR_CONFIG.systemPromptFormat).toBe('');
       expect(DEFAULT_OR_CONFIG.model).toMatch(/\//); // e.g. 'anthropic/claude-...'
     });
 
@@ -48,7 +49,8 @@ describe('llmStorage', () => {
       expect(cfg.apiKey).toBe('sk-or-test');
       expect(cfg.temperature).toBe(1.2);
       expect(cfg.maxTokens).toBe(DEFAULT_OR_CONFIG.maxTokens); // unchanged
-      expect(cfg.systemPrompt).toBe(DEFAULT_OR_CONFIG.systemPrompt); // unchanged
+      expect(cfg.systemPromptGenerate).toBe(DEFAULT_OR_CONFIG.systemPromptGenerate); // unchanged
+      expect(cfg.systemPromptFormat).toBe(DEFAULT_OR_CONFIG.systemPromptFormat); // unchanged
     });
 
     it('preserves null seed across updates', () => {
@@ -64,6 +66,19 @@ describe('llmStorage', () => {
     it('returns DEFAULT on corrupted storage', () => {
       localStorage.setItem('acestep.llm.openrouter', '{not valid json');
       expect(llmStorage.getOpenRouter()).toEqual(DEFAULT_OR_CONFIG);
+    });
+
+    it('partial update of one prompt field does not clobber the other', () => {
+      llmStorage.setOpenRouter({ systemPromptGenerate: 'my generate override' });
+      const cfg = llmStorage.getOpenRouter();
+      expect(cfg.systemPromptGenerate).toBe('my generate override');
+      expect(cfg.systemPromptFormat).toBe(''); // still default
+    });
+
+    it('reset to default is represented as empty string', () => {
+      llmStorage.setOpenRouter({ systemPromptGenerate: 'custom' });
+      llmStorage.setOpenRouter({ systemPromptGenerate: '' });
+      expect(llmStorage.getOpenRouter().systemPromptGenerate).toBe('');
     });
   });
 

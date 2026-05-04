@@ -44,7 +44,8 @@ export interface OpenRouterConfig {
   repetitionPenalty: number;
   maxTokens: number;
   seed: number | null;
-  systemPrompt: string;     // empty = use built-in prompt
+  systemPromptGenerate: string;  // empty = use built-in default from system_generate.en.md
+  systemPromptFormat: string;    // empty = use built-in default from system_format.en.md
 }
 
 // Errors

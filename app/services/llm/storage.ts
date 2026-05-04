@@ -19,7 +19,8 @@ export const DEFAULT_OR_CONFIG: OpenRouterConfig = {
   repetitionPenalty: 1.0,
   maxTokens: 2000,
   seed: null,
-  systemPrompt: '',
+  systemPromptGenerate: '',
+  systemPromptFormat: '',
 };
 
 const RECENT_MODELS_LIMIT = 5;
