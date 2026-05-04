@@ -15,6 +15,38 @@ export interface PartialResult {
 }
 
 /**
+ * String-aware bracket counter: returns true only when the "tags": [ array
+ * is properly closed in `raw`, ignoring `]` characters inside string literals.
+ */
+function tagsArrayIsClosed(raw: string): boolean {
+  const idx = raw.search(/"tags"\s*:\s*\[/);
+  if (idx === -1) return false;
+  let i = raw.indexOf('[', idx);
+  if (i === -1) return false;
+  i++; // past [
+  let depth = 1;
+  let inStr = false;
+  let escape = false;
+  while (i < raw.length) {
+    const c = raw[i];
+    if (inStr) {
+      if (escape) { escape = false; }
+      else if (c === '\\') { escape = true; }
+      else if (c === '"') { inStr = false; }
+    } else {
+      if (c === '"') inStr = true;
+      else if (c === '[') depth++;
+      else if (c === ']') {
+        depth--;
+        if (depth === 0) return true;
+      }
+    }
+    i++;
+  }
+  return false;
+}
+
+/**
  * Unescape a partial JSON string body, withholding incomplete escape sequences
  * at the end of the buffer (so the caller can append the next chunk and try again).
  */
@@ -39,8 +71,24 @@ function unescapeJsonStringPartial(s: string): string {
         if (i + 6 > s.length) return out; // half-unicode — hold
         const hex = s.slice(i + 2, i + 6);
         if (!/^[0-9a-fA-F]{4}$/.test(hex)) return out;
-        out += String.fromCharCode(parseInt(hex, 16));
-        i += 6;
+        const code = parseInt(hex, 16);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+          // High surrogate — need the low surrogate too
+          const next = s.slice(i + 6, i + 12);
+          if (!/^\\u[0-9a-fA-F]{4}$/.test(next)) return out; // withhold until next chunk
+          const low = parseInt(next.slice(2), 16);
+          if (low < 0xDC00 || low > 0xDFFF) {
+            // Malformed surrogate pair — emit replacement char, skip both escape sequences
+            out += '\uFFFD';
+            i += 12;
+            break;
+          }
+          out += String.fromCodePoint(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00));
+          i += 12;
+        } else {
+          out += String.fromCodePoint(code);
+          i += 6;
+        }
         break;
       }
       default:
@@ -119,7 +167,7 @@ export function extractPartial(raw: string): PartialResult {
       const v = parsed[f];
       if (f === 'tags') {
         // Tags is closed only when fully parsed AND the closing `]` is in the source.
-        if (Array.isArray(v) && /"tags"\s*:\s*\[[^\]]*\]/.test(raw)) {
+        if (Array.isArray(v) && tagsArrayIsClosed(raw)) {
           (closed as any)[f] = v;
         }
       } else if (f === 'bpm' || f === 'durationSec') {

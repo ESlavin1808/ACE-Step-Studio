@@ -103,4 +103,41 @@ describe('extractPartial', () => {
     expect(r.closed.lyrics).toBe('first');
     expect(r.openStringField?.name).not.toBe('lyrics');
   });
+
+  describe('tags-closed bracket counter (B1 fix)', () => {
+    it('does not commit tags when array has a string element containing "]"', () => {
+      const r = extractPartial('{"tags": ["foo]bar", "ba');
+      expect(r.closed.tags).toBeUndefined();
+    });
+
+    it('commits tags when properly closed even if elements contain "]"', () => {
+      const r = extractPartial('{"tags": ["foo]bar", "baz"], "title": "T');
+      expect(r.closed.tags).toEqual(['foo]bar', 'baz']);
+    });
+
+    it('does not commit tags when bracket count is unbalanced', () => {
+      // nested-looking array, still in flight
+      const r = extractPartial('{"tags": ["a", "b"');
+      expect(r.closed.tags).toBeUndefined();
+    });
+  });
+
+  describe('high-surrogate handling (B2 fix)', () => {
+    it('withholds lone high surrogate at end of buffer', () => {
+      // \uD83D is a high surrogate (start of 😀)
+      const r = extractPartial('{"lyrics": "hi \\uD83D');
+      expect(r.openStringField?.valueSoFar).toBe('hi ');
+    });
+
+    it('emits full code point when both halves are present', () => {
+      const r = extractPartial('{"lyrics": "hi \\uD83D\\uDE00 there');
+      expect(r.openStringField?.valueSoFar).toBe('hi 😀 there');
+    });
+
+    it('emits replacement char when high surrogate is followed by malformed low', () => {
+      // 0xD83D high, but next is 0x0041 (just 'A' — not a low surrogate)
+      const r = extractPartial('{"lyrics": "hi \\uD83D\\u0041');
+      expect(r.openStringField?.valueSoFar).toBe('hi \uFFFD');
+    });
+  });
 });
