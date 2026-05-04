@@ -1,0 +1,123 @@
+// Domain types
+
+export interface SongDraftInput {
+  topic: string;
+  primary: 'lyrics' | 'caption';
+  language: string;        // 'en', 'ru', 'zh', 'ja', 'ko', etc. — same values as today's vocalLanguage
+  instrumental: boolean;
+  durationSec?: number;    // user hint
+}
+
+export interface FormatInput {
+  caption: string;
+  lyrics: string;
+  bpm?: number;
+  durationSec?: number;
+  keyScale?: string;
+  timeSignature?: string;
+  language: string;
+  primary: 'lyrics' | 'caption';
+}
+
+export interface SongDraft {
+  title: string;
+  caption: string;
+  lyrics: string;
+  tags: string[];
+  bpm: number;
+  keyScale: string;
+  timeSignature: string;
+  durationSec: number;
+}
+
+// Provider config (persisted in localStorage)
+
+export interface OpenRouterConfig {
+  apiKey: string;
+  model: string;
+  temperature: number;
+  topP: number;
+  topK: number;
+  minP: number;
+  frequencyPenalty: number;
+  presencePenalty: number;
+  repetitionPenalty: number;
+  maxTokens: number;
+  seed: number | null;
+  systemPrompt: string;     // empty = use built-in prompt
+}
+
+// Errors
+
+export type ErrorCode =
+  | 'KEY_MISSING'
+  | 'KEY_INVALID'
+  | 'RATE_LIMITED'
+  | 'INSUFFICIENT_FUNDS'
+  | 'MODEL_UNAVAILABLE'
+  | 'SCHEMA_UNSUPPORTED'
+  | 'SCHEMA_NONCOMPLIANT'
+  | 'INVALID_JSON'
+  | 'TIMEOUT'
+  | 'NETWORK'
+  | 'UNKNOWN';
+
+export class OpenRouterError extends Error {
+  constructor(
+    public readonly code: ErrorCode,
+    message: string,
+    public readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = 'OpenRouterError';
+  }
+}
+
+// Generation state machine
+
+export type GenStage =
+  | { kind: 'idle' }
+  | { kind: 'connecting'; startedAt: number }
+  | {
+      kind: 'streaming';
+      startedAt: number;
+      bytesReceived: number;
+      rawPreview: string;
+      partial: Partial<SongDraft>;
+    }
+  | { kind: 'parsing'; startedAt: number }
+  | {
+      kind: 'success';
+      draft: SongDraft;
+      usage: {
+        promptTokens: number;
+        completionTokens: number;
+        costUsd: number | null;
+      };
+      finishedAt: number;
+    }
+  | { kind: 'cancelled'; finishedAt: number }
+  | {
+      kind: 'error';
+      message: string;
+      code: ErrorCode;
+      finishedAt: number;
+    };
+
+// Provider streaming events
+
+export type GenEvent =
+  | { type: 'firstChunk' }
+  | {
+      type: 'chunk';
+      raw: string;
+      partial: Partial<SongDraft>;
+      openStringField?: { name: keyof SongDraft; valueSoFar: string };
+    }
+  | { type: 'streamDone'; raw: string }
+  | {
+      type: 'usage';
+      promptTokens: number;
+      completionTokens: number;
+      costUsd: number | null;
+    };
