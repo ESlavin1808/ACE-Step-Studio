@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Sparkles, ChevronDown, Settings2, Trash2, Music2, Sliders, Dices, Hash, RefreshCw, Plus, Upload, Play, Pause, Loader2, Disc3, Undo2, Wand2 } from 'lucide-react';
+import { Sparkles, ChevronDown, Settings2, Trash2, Music2, Sliders, Dices, Hash, RefreshCw, Plus, Upload, Play, Pause, Loader2, Disc3, Undo2, Wand2, Square } from 'lucide-react';
 import { AudioWaveform } from './AudioWaveform';
 import { GenerationParams, Song } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -7,6 +7,12 @@ import { useI18n } from '../context/I18nContext';
 import { generateApi, settingsApi } from '../services/api';
 import { MAIN_STYLES } from '../data/genres';
 import { EditableSlider } from './EditableSlider';
+import { UseOpenRouterToggle } from './UseOpenRouterToggle';
+import { LmProviderPanel } from './LmProviderPanel';
+import { GenerationStatusPanel } from './GenerationStatusPanel';
+import { useOpenRouterGeneration } from '../services/llm/useOpenRouterGeneration';
+import { llmStorage } from '../services/llm/storage';
+import type { SongDraft } from '../services/llm/types';
 
 interface ReferenceTrack {
   id: string;
@@ -199,7 +205,18 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [inferMethod, setInferMethod] = useState<'ode' | 'sde'>('ode');
   const [lmBackend, setLmBackend] = useState<'pt' | 'vllm'>('pt');
   const [lmModel, setLmModel] = useState('');
+  // Tracks the *actual* LM model loaded on the backend (server-reported, distinct
+  // from `lmModel` which represents the user-selected target). Empty string means
+  // no local LM is currently loaded.
+  const [activeLmModel, setActiveLmModel] = useState('');
   const [shift, setShift] = useState(3.0);
+
+  // OpenRouter (LLM provider) integration
+  const [useOpenRouter, setUseOpenRouter] = useState<boolean>(() => {
+    const stored = llmStorage.getUseOpenRouter();
+    return stored ?? false;
+  });
+  const [lastOpenRouterModelId, setLastOpenRouterModelId] = useState<string | null>(null);
 
   // LM Parameters (under Expert)
   const [showLmParams, setShowLmParams] = useState(false);
@@ -313,6 +330,16 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   React.useEffect(() => { localStorage.setItem('ace-style', style); }, [style]);
   React.useEffect(() => { localStorage.setItem('ace-title', title); }, [title]);
 
+  // OpenRouter: default toggle ON in no-LM mode (only if user hasn't explicitly set it)
+  useEffect(() => {
+    if (llmStorage.getUseOpenRouter() === null && !activeLmModel) {
+      setUseOpenRouter(true);
+    }
+  }, [activeLmModel]);
+
+  // OpenRouter: persist toggle on every change
+  useEffect(() => { llmStorage.setUseOpenRouter(useOpenRouter); }, [useOpenRouter]);
+
   // Load settings on mount (once)
   const settingsLoadedOnceRef = useRef(false);
   React.useEffect(() => {
@@ -402,6 +429,9 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               if (data.activeLmModel) setLmModel(data.activeLmModel);
               if (data.activeLmBackend) setLmBackend(data.activeLmBackend);
             }
+            // Always track the *actual* loaded LM (independent of editing state).
+            // Empty string when backend reports no LM available.
+            setActiveLmModel(typeof data.activeLmModel === 'string' ? data.activeLmModel : '');
           }
           // During loading, show the target model
           if (data.state === 'loading' && data.model) {
@@ -964,7 +994,75 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [isGeneratingLyrics, setIsGeneratingLyrics] = useState(false);
   const [isGeneratingStyle, setIsGeneratingStyle] = useState(false);
 
+  // OpenRouter generation hook. Uses refs to thread the live activeOp/activePrimary
+  // into the onPartial callback (which captures values at first render otherwise).
+  const orActiveOpRef = useRef<'generate' | 'format' | null>(null);
+  const orActivePrimaryRef = useRef<'lyrics' | 'caption' | null>(null);
+  const bpmRef = useRef(bpm); bpmRef.current = bpm;
+  const durationRef = useRef(duration); durationRef.current = duration;
+  const keyScaleRef = useRef(keyScale); keyScaleRef.current = keyScale;
+  const timeSignatureRef = useRef(timeSignature); timeSignatureRef.current = timeSignature;
+
+  const orHook = useOpenRouterGeneration({
+    onPartial: (partial, openField) => {
+      const activeOp = orActiveOpRef.current;
+      const activePrimary = orActivePrimaryRef.current;
+
+      // Primary semantic fills
+      if (partial.caption && (activeOp === 'format' || activePrimary === 'caption')) {
+        setStyle(partial.caption);
+      }
+      if (partial.lyrics && (
+        activePrimary === 'lyrics' ||
+        (activeOp === 'format' && activePrimary === 'caption')
+      )) {
+        setLyrics(partial.lyrics);
+      }
+
+      // Live-stream the open string field char-by-char into its textarea
+      if (openField?.name === 'lyrics' && activePrimary === 'lyrics') {
+        setLyrics(openField.valueSoFar);
+      }
+      if (openField?.name === 'caption' && activePrimary === 'caption') {
+        setStyle(openField.valueSoFar);
+      }
+
+      // Aux fields: only-if-empty
+      if (partial.bpm && bpmRef.current === 0) setBpm(partial.bpm);
+      if (partial.durationSec && durationRef.current <= 0) setDuration(partial.durationSec);
+      if (partial.keyScale && !keyScaleRef.current) setKeyScale(partial.keyScale);
+      if (partial.timeSignature && !timeSignatureRef.current) {
+        const ts = String(partial.timeSignature);
+        setTimeSignature(ts.includes('/') ? ts : `${ts}/4`);
+      }
+    },
+    onFinal: (_draft: SongDraft) => {
+      setLastOpenRouterModelId(llmStorage.getOpenRouter().model);
+    },
+  });
+
+  // Keep refs in sync with the hook's published state. onPartial fires *during*
+  // a run, so we also set refs eagerly inside the run-dispatch branches below.
+  useEffect(() => {
+    orActiveOpRef.current = orHook.activeOp;
+    orActivePrimaryRef.current = orHook.activePrimary;
+  }, [orHook.activeOp, orHook.activePrimary]);
+
   const handleAiGenerate = async (target: 'style' | 'lyrics') => {
+    if (useOpenRouter) {
+      if (!style.trim()) return;
+      const primary = target === 'style' ? 'caption' : 'lyrics';
+      orActiveOpRef.current = 'generate';
+      orActivePrimaryRef.current = primary;
+      orHook.runGenerate({
+        topic: style,
+        primary,
+        language: vocalLanguage || 'en',
+        instrumental: target === 'style' ? instrumental : false,
+        durationSec: duration > 0 ? duration : undefined,
+      });
+      return;
+    }
     if (!token || !style.trim()) return;
     if (target === 'lyrics') setIsGeneratingLyrics(true);
     else setIsGeneratingStyle(true);
@@ -999,6 +1097,25 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
 
   // Format/enhance existing content via LLM
   const handleFormat = async (target: 'style' | 'lyrics') => {
+    if (useOpenRouter) {
+      if (target === 'style' && !style.trim()) return;
+      if (target === 'lyrics' && !lyrics.trim()) return;
+      const primary = target === 'style' ? 'caption' : 'lyrics';
+      orActiveOpRef.current = 'format';
+      orActivePrimaryRef.current = primary;
+      orHook.runFormat({
+        caption: style,
+        lyrics,
+        bpm: bpm > 0 ? bpm : undefined,
+        durationSec: duration > 0 ? duration : undefined,
+        keyScale: keyScale || undefined,
+        timeSignature: timeSignature || undefined,
+        language: vocalLanguage || 'en',
+        instrumental: target === 'style' ? instrumental : false,
+        primary,
+      });
+      return;
+    }
     if (!token) return;
     if (target === 'style' && !style.trim()) return;
     if (target === 'lyrics' && !lyrics.trim()) return;
@@ -1346,7 +1463,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         batchSize,
         randomSeed: randomSeed || i > 0,
         seed: jobSeed,
-        thinking,
+        thinking: !activeLmModel ? false : thinking,
+        openrouterModel: lastOpenRouterModelId,
         enhance,
         audioFormat,
         inferMethod,
@@ -1455,6 +1573,15 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
       setBulkCount(1);
     }
   };
+
+  // Derived per-button active flags — combine local-LM in-flight booleans with
+  // the OpenRouter hook's active op/primary so each button shows its own loader
+  // and others stay disabled while a run is in flight.
+  const isGenLyricsActive = isGeneratingLyrics || (orHook.activeOp === 'generate' && orHook.activePrimary === 'lyrics');
+  const isFmtLyricsActive = isFormattingLyrics || (orHook.activeOp === 'format' && orHook.activePrimary === 'lyrics');
+  const isGenStyleActive  = isGeneratingStyle  || (orHook.activeOp === 'generate' && orHook.activePrimary === 'caption');
+  const isFmtStyleActive  = isFormattingStyle  || (orHook.activeOp === 'format' && orHook.activePrimary === 'caption');
+  const orRunning = orHook.activeOp !== null;
 
   return (
     <div
@@ -1974,20 +2101,24 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                     <Trash2 size={14} />
                   </button>
                   <button
-                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isGeneratingLyrics ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
+                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isGenLyricsActive ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
                     title={t('aiGenerate') || 'Generate lyrics from scratch'}
-                    onClick={() => handleAiGenerate('lyrics')}
-                    disabled={isGeneratingLyrics || isFormattingLyrics || !style.trim()}
+                    onClick={useOpenRouter && isGenLyricsActive ? () => orHook.cancel() : () => handleAiGenerate('lyrics')}
+                    disabled={(isGenLyricsActive && !useOpenRouter) || isFmtLyricsActive || (orRunning && !isGenLyricsActive) || !style.trim()}
                   >
-                    {isGeneratingLyrics ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                    {useOpenRouter && isGenLyricsActive
+                      ? <Square size={14} />
+                      : (isGenLyricsActive ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />)}
                   </button>
                   <button
-                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isFormattingLyrics ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
+                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isFmtLyricsActive ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
                     title={t('aiFormat') || 'Enhance existing lyrics'}
-                    onClick={() => handleFormat('lyrics')}
-                    disabled={isFormattingLyrics || isGeneratingLyrics || !lyrics.trim()}
+                    onClick={useOpenRouter && isFmtLyricsActive ? () => orHook.cancel() : () => handleFormat('lyrics')}
+                    disabled={(isFmtLyricsActive && !useOpenRouter) || isGenLyricsActive || (orRunning && !isFmtLyricsActive) || !lyrics.trim()}
                   >
-                    {isFormattingLyrics ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    {useOpenRouter && isFmtLyricsActive
+                      ? <Square size={14} />
+                      : (isFmtLyricsActive ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />)}
                   </button>
                 </div>
               </div>
@@ -2094,20 +2225,24 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                     <Trash2 size={14} />
                   </button>
                   <button
-                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isGeneratingStyle ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
+                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isGenStyleActive ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
                     title={t('aiGenerate') || 'Generate style from scratch'}
-                    onClick={() => handleAiGenerate('style')}
-                    disabled={isGeneratingStyle || isFormattingStyle || !style.trim()}
+                    onClick={useOpenRouter && isGenStyleActive ? () => orHook.cancel() : () => handleAiGenerate('style')}
+                    disabled={(isGenStyleActive && !useOpenRouter) || isFmtStyleActive || (orRunning && !isGenStyleActive) || !style.trim()}
                   >
-                    {isGeneratingStyle ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                    {useOpenRouter && isGenStyleActive
+                      ? <Square size={14} />
+                      : (isGenStyleActive ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />)}
                   </button>
                   <button
-                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isFormattingStyle ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
+                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isFmtStyleActive ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
                     title={t('aiFormat') || 'Enhance existing style'}
-                    onClick={() => handleFormat('style')}
-                    disabled={isFormattingStyle || isGeneratingStyle || !style.trim()}
+                    onClick={useOpenRouter && isFmtStyleActive ? () => orHook.cancel() : () => handleFormat('style')}
+                    disabled={(isFmtStyleActive && !useOpenRouter) || isGenStyleActive || (orRunning && !isFmtStyleActive) || !style.trim()}
                   >
-                    {isFormattingStyle ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    {useOpenRouter && isFmtStyleActive
+                      ? <Square size={14} />
+                      : (isFmtStyleActive ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />)}
                   </button>
                   <button
                     className="p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors text-zinc-500 hover:text-black dark:hover:text-white"
@@ -2139,6 +2274,14 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* OpenRouter generation status — shown when a remote LLM run is in flight or just finished */}
+            <GenerationStatusPanel
+              state={orHook.state}
+              onCancel={orHook.cancel}
+              onRetry={orHook.retry}
+              onDismiss={orHook.dismissError}
+            />
 
             {/* Title Input */}
             <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 overflow-hidden">
@@ -2763,20 +2906,28 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               <p className="text-[10px] text-zinc-500">{t('lmBackendHint') || 'vLLM uses CUDA graphs for faster LLM inference'}</p>
             </div>
 
-            {/* LM Model */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmModelLabel')}</label>
-              <select
-                value={lmModel}
-                onChange={(e) => { setLmModel(e.target.value); lmEditingRef.current = true; }}
-                className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
-              >
-                <option value="acestep-5Hz-lm-0.6B">{t('lmModel06B')}</option>
-                <option value="acestep-5Hz-lm-1.7B">{t('lmModel17B')}</option>
-                <option value="acestep-5Hz-lm-4B">{t('lmModel4B')}</option>
-              </select>
-              <p className="text-[10px] text-zinc-500">{t('lmModelHint')}</p>
-            </div>
+            {/* OpenRouter toggle — selects between local LM and remote OpenRouter provider */}
+            <UseOpenRouterToggle value={useOpenRouter} onChange={setUseOpenRouter} />
+
+            {/* LM Model — local LM only */}
+            {!useOpenRouter && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmModelLabel')}</label>
+                <select
+                  value={lmModel}
+                  onChange={(e) => { setLmModel(e.target.value); lmEditingRef.current = true; }}
+                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
+                >
+                  <option value="acestep-5Hz-lm-0.6B">{t('lmModel06B')}</option>
+                  <option value="acestep-5Hz-lm-1.7B">{t('lmModel17B')}</option>
+                  <option value="acestep-5Hz-lm-4B">{t('lmModel4B')}</option>
+                </select>
+                <p className="text-[10px] text-zinc-500">{t('lmModelHint')}</p>
+              </div>
+            )}
+
+            {/* OpenRouter provider config — shown when toggle is ON */}
+            {useOpenRouter && <LmProviderPanel />}
 
             {/* Apply LM Settings button */}
             <button
@@ -2843,11 +2994,18 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
 
             {/* Thinking Toggle */}
             <div className="flex items-center justify-between py-2 border-t border-zinc-100 dark:border-white/5">
-              <span className={`text-xs font-medium ${loraLoaded ? 'text-zinc-400 dark:text-zinc-600' : 'text-zinc-600 dark:text-zinc-400'}`} title={t('hintThinkingCot') || 'Lets the lyric model reason about structure and metadata. Slightly slower.'}>{t('thinkingCot')}</span>
+              <span className={`text-xs font-medium ${loraLoaded || !activeLmModel ? 'text-zinc-400 dark:text-zinc-600' : 'text-zinc-600 dark:text-zinc-400'}`} title={t('hintThinkingCot') || 'Lets the lyric model reason about structure and metadata. Slightly slower.'}>
+                {t('thinkingCot')}
+                {!activeLmModel && (
+                  <span className="text-[10px] text-zinc-500 ml-2" title="Requires local LM — run with run.bat">
+                    no LM
+                  </span>
+                )}
+              </span>
               <button
-                onClick={() => !loraLoaded && setThinking(!thinking)}
-                disabled={loraLoaded}
-                className={`w-10 h-5 rounded-full flex items-center transition-colors duration-200 px-0.5 border border-zinc-200 dark:border-white/5 ${thinking ? 'bg-pink-600' : 'bg-zinc-300 dark:bg-black/40'} ${loraLoaded ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                onClick={() => activeLmModel && !loraLoaded && setThinking(!thinking)}
+                disabled={loraLoaded || !activeLmModel}
+                className={`w-10 h-5 rounded-full flex items-center transition-colors duration-200 px-0.5 border border-zinc-200 dark:border-white/5 ${thinking ? 'bg-pink-600' : 'bg-zinc-300 dark:bg-black/40'} ${loraLoaded || !activeLmModel ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 <div className={`w-4 h-4 rounded-full bg-white transform transition-transform duration-200 shadow-sm ${thinking ? 'translate-x-5' : 'translate-x-0'}`} />
               </button>
@@ -2875,22 +3033,24 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               <div className="text-[11px] text-rose-500">{uploadError}</div>
             )}
 
-            {/* LM Parameters */}
-            <button
-              onClick={() => setShowLmParams(!showLmParams)}
-              className="w-full flex items-center justify-between px-4 py-3 bg-white/60 dark:bg-black/20 rounded-xl border border-zinc-200/70 dark:border-white/10 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <Music2 size={16} className="text-zinc-500" />
-                <div className="flex flex-col items-start">
-                  <span title={t('hintLmParameters') || 'Controls the 5Hz lyric/caption model sampling behavior.'}>{t('lmParameters')}</span>
-                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-normal">{t('controlLyricGeneration')}</span>
+            {/* LM Parameters — only relevant when a local LM is actually loaded */}
+            {activeLmModel !== '' && (
+              <button
+                onClick={() => setShowLmParams(!showLmParams)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-white/60 dark:bg-black/20 rounded-xl border border-zinc-200/70 dark:border-white/10 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Music2 size={16} className="text-zinc-500" />
+                  <div className="flex flex-col items-start">
+                    <span title={t('hintLmParameters') || 'Controls the 5Hz lyric/caption model sampling behavior.'}>{t('lmParameters')}</span>
+                    <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-normal">{t('controlLyricGeneration')}</span>
+                  </div>
                 </div>
-              </div>
-              <ChevronDown size={16} className={`text-zinc-500 transition-transform ${showLmParams ? 'rotate-180' : ''}`} />
-            </button>
+                <ChevronDown size={16} className={`text-zinc-500 transition-transform ${showLmParams ? 'rotate-180' : ''}`} />
+              </button>
+            )}
 
-            {showLmParams && (
+            {activeLmModel !== '' && showLmParams && (
               <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 p-4 space-y-4">
                 {/* LM Temperature */}
                 <EditableSlider
