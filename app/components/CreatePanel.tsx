@@ -1015,6 +1015,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const durationRef = useRef(duration); durationRef.current = duration;
   const keyScaleRef = useRef(keyScale); keyScaleRef.current = keyScale;
   const timeSignatureRef = useRef(timeSignature); timeSignatureRef.current = timeSignature;
+  // Refs the simple-mode→OR pre-flight reads after `await` to avoid stale
+  // closure on the captured React state (which reflects the click moment,
+  // not the post-streaming filled values).
+  const styleRef = useRef(style); styleRef.current = style;
+  const lyricsTextRef = useRef(lyrics); lyricsTextRef.current = lyrics;
+  const titleRef = useRef(title); titleRef.current = title;
 
   const orHook = useOpenRouterGeneration({
     onPartial: (partial, openField) => {
@@ -1439,11 +1445,62 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     }
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
+    // Simple mode + OpenRouter ON + no local LM = pre-flight: ask OR to expand
+    // the user's description into caption/lyrics/metadata, fill the same fields
+    // a Custom-mode submission would have, then proceed as Custom. The Python
+    // pipeline's sample_mode wants a local 5Hz LM that doesn't exist in
+    // run-no-lm.bat; without this pre-flight the audio gen would either error
+    // or get blank inputs.
+    if (!customMode && useOpenRouter && !activeLmModel) {
+      if (!songDescription.trim()) return;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let resolved = false;
+          const wrappedHook = orHook;
+          // We use the same hook; its onPartial fills style/lyrics/etc as it
+          // streams (per the existing onPartial wiring above).
+          // Listen for terminal state via a subscription pattern:
+          const cleanup = setInterval(() => {
+            const k = wrappedHook.state.kind;
+            if (k === 'success') { clearInterval(cleanup); if (!resolved) { resolved = true; resolve(); } }
+            else if (k === 'error' || k === 'cancelled') { clearInterval(cleanup); if (!resolved) { resolved = true; reject(new Error('OpenRouter pre-flight failed: ' + k)); } }
+          }, 250);
+          // Fire generate. activePrimary='lyrics' so onPartial fills both lyrics and aux fields.
+          orHook.runGenerate({
+            topic: songDescription,
+            primary: 'lyrics',
+            language: vocalLanguage || 'en',
+            instrumental,
+            durationSec: duration > 0 ? duration : undefined,
+            thinking,
+          });
+        });
+      } catch (e) {
+        console.error('[Simple+OR] pre-flight failed:', e);
+        return;
+      }
+    }
+
+    // After pre-flight we ALWAYS submit in customMode shape so the backend
+    // doesn't try to re-expand the description through a non-existent LM.
+    const effectiveCustomMode = customMode || (useOpenRouter && !activeLmModel);
+    // Read the freshest values via refs — after the OR pre-flight `await`
+    // above, the React closure variables (style, lyrics, bpm, …) are still
+    // the snapshot from the click moment, but the streaming has filled the
+    // refs synchronously through onPartial / setBpm / setKeyScale / etc.
+    const effStyle = effectiveCustomMode && styleRef.current ? styleRef.current : style;
+    const effLyrics = effectiveCustomMode && lyricsTextRef.current ? lyricsTextRef.current : lyrics;
+    const effTitle = effectiveCustomMode && titleRef.current ? titleRef.current : title;
+    const effBpm = effectiveCustomMode && bpmRef.current > 0 ? bpmRef.current : bpm;
+    const effKeyScale = effectiveCustomMode && keyScaleRef.current ? keyScaleRef.current : keyScale;
+    const effTimeSig = effectiveCustomMode && timeSignatureRef.current ? timeSignatureRef.current : timeSignature;
+    const effDuration = effectiveCustomMode && durationRef.current > 0 ? durationRef.current : duration;
+
     const styleWithGender = (() => {
-      if (!vocalGender) return style;
+      if (!vocalGender) return effStyle;
       const genderHint = vocalGender === 'male' ? 'Male vocals' : 'Female vocals';
-      const trimmed = style.trim();
+      const trimmed = effStyle.trim();
       return trimmed ? `${trimmed}\n${genderHint}` : genderHint;
     })();
 
@@ -1460,19 +1517,19 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
 
       // Simple mode: use only songDescription + safe defaults, ignore custom mode settings
       // Custom mode: use all user-configured parameters
-      onGenerate(customMode ? {
+      onGenerate(effectiveCustomMode ? {
         customMode: true,
-        prompt: lyrics,
-        lyrics,
+        prompt: effLyrics,
+        lyrics: effLyrics,
         style: styleWithGender,
-        title: bulkCount > 1 ? `${title} (${i + 1})` : title,
+        title: bulkCount > 1 ? `${effTitle} (${i + 1})` : effTitle,
         ditModel: selectedModel,
         instrumental,
         vocalLanguage,
-        bpm,
-        keyScale,
-        timeSignature,
-        duration,
+        bpm: effBpm,
+        keyScale: effKeyScale,
+        timeSignature: effTimeSig,
+        duration: effDuration,
         inferenceSteps,
         guidanceScale,
         batchSize,
