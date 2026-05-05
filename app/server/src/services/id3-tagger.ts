@@ -1,5 +1,4 @@
 import NodeID3 from 'node-id3';
-import { generatePollinationsCover, songIdToSeed } from './pollinations.js';
 
 /**
  * Subset of PollinationsConfig that the cover fetcher needs. Sent from the
@@ -77,44 +76,23 @@ export function tagMp3Buffer(buffer: Buffer, options: TagOptions): Buffer {
 }
 
 /**
- * Fetch cover image. Tries Pollinations.ai if enabled in config; falls
- * back to picsum.photos on any failure (preserving previous behavior so
- * audio-gen never breaks because of cover-gen issues).
+ * Fetch a fast cover image (picsum) for embedding into the MP3 ID3 tag.
  *
- * Returns the image buffer for ID3 tag embedding plus an optional
- * `polBuffer` field — when present, the caller should also persist this
- * to disk and write the URL into songs.cover_url so the in-app UI can
- * render a real cover instead of the seeded gradient. We only persist
- * Pollinations-generated covers; picsum stays inside the MP3 tag only,
- * matching pre-existing behavior.
+ * Pollinations cover generation is NOT done here — it runs out-of-band in
+ * `cover-jobs.ts` (kicked off by the status-poll endpoint) so audio-gen
+ * pipeline is never blocked by image gen. The only purpose of this fetch
+ * now is to give the downloaded MP3 file a thumbnail; the in-app UI cover
+ * comes from `songs.cover_url` populated by the background attach.
+ *
+ * The unused `pol` parameter is kept on the signature for backwards
+ * compatibility with callers that still pass it; if/when Pollinations
+ * gen is fast enough to embed inline, this could fork on `pol.enabled`
+ * again. For now it's ignored.
  */
 export async function fetchCoverImage(
   songId: string,
-  pol?: PollinationsCoverConfig
-): Promise<{ buffer: Buffer; mimeType: string; fromPollinations?: boolean } | undefined> {
-  // Try Pollinations first when the user opted in and supplied a model.
-  if (pol && pol.enabled && pol.model && pol.prompt) {
-    const seed = pol.seedMode === 'song' ? songIdToSeed(songId) : undefined;
-    const result = await generatePollinationsCover({
-      prompt: pol.prompt,
-      model: pol.model,
-      width: pol.width,
-      height: pol.height,
-      seed,
-      enhance: pol.enhance,
-      nologo: pol.nologo,
-      safe: pol.safe,
-      apiKey: pol.apiKey || undefined,
-    });
-    if (result) {
-      return { buffer: result.buffer, mimeType: result.mimeType, fromPollinations: true };
-    }
-    // Pollinations failed — log already emitted by the service. Fall through.
-    console.warn(`[cover] Pollinations failed for song ${songId}, falling back to picsum`);
-  }
-
-  // Fallback: picsum.photos seeded gradient (legacy behavior — used purely
-  // for the MP3 ID3 tag image so downloaded files have a thumbnail).
+  _pol?: PollinationsCoverConfig
+): Promise<{ buffer: Buffer; mimeType: string } | undefined> {
   try {
     const url = `https://picsum.photos/seed/${songId}/400/400`;
     const controller = new AbortController();
