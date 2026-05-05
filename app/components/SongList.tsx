@@ -700,7 +700,11 @@ const SongItem: React.FC<SongItemProps> = ({
                           className="inline-flex items-center justify-center text-[9px] font-bold text-white bg-gradient-to-r from-pink-500 to-purple-500 px-1.5 py-0.5 rounded-sm shadow-sm"
                           title={[
                             `DiT: ${song.ditModel || '?'}`,
-                            `LM: ${song.lmModel || '?'} (${song.lmBackend || '?'})`,
+                            // Only show LM line when a real local model was used
+                            // for this track. With run-no-lm.bat or when text was
+                            // generated through OpenRouter, lmModel is empty/null
+                            // and "LM: ? (pt)" is just noise.
+                            song.lmModel ? `LM: ${song.lmModel} (${song.lmBackend || '?'})` : null,
                             song.openrouterModel ? `Text: openrouter (${song.openrouterModel})` : null,
                           ].filter(Boolean).join(' | ')}
                         >
