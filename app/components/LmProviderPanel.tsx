@@ -17,6 +17,9 @@ export const LmProviderPanel: React.FC = () => {
   const [modelQuery, setModelQuery] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
+  // Filter chips on top of the model list. 'all' = no filter, 'free' = only
+  // models with prompt+completion price = 0, 'paid' = everything else.
+  const [modelFilter, setModelFilter] = useState<'all' | 'free' | 'paid'>('all');
   const [showSysPromptGen, setShowSysPromptGen] = useState(false);
   const [showSysPromptFmt, setShowSysPromptFmt] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -52,16 +55,60 @@ export const LmProviderPanel: React.FC = () => {
   }, [modelPickerOpen]);
 
   const recent = llmStorage.getRecentModels();
+
+  // Helper used both for filtering and display badge — keep the predicate in
+  // one place so we never get a card showing "FREE" while being filtered out
+  // of the free chip (or vice versa).
+  const isFreeTier = (m: any): boolean => {
+    if (!m?.pricing) return false;
+    const promptCost = parseFloat(m.pricing.prompt || '0');
+    const completionCost = parseFloat(m.pricing.completion || '0');
+    return Number.isFinite(promptCost) && Number.isFinite(completionCost) &&
+           promptCost === 0 && completionCost === 0;
+  };
+
+  // Sorted full list: free models first (alphabetical inside each bucket),
+  // then paid sorted by output price ascending. The user explicitly asked
+  // for free vs paid sorting + 'show all models' (the previous .slice(0, 50)
+  // hid roughly 250 OpenRouter models).
+  const sortedModels = useMemo(() => {
+    const arr = [...models];
+    arr.sort((a, b) => {
+      const aFree = isFreeTier(a) ? 0 : 1;
+      const bFree = isFreeTier(b) ? 0 : 1;
+      if (aFree !== bFree) return aFree - bFree;
+      if (aFree === 0) {
+        // Both free → alphabetical by name/id
+        return (a.name || a.id || '').localeCompare(b.name || b.id || '');
+      }
+      // Both paid → cheapest output first; if equal, by name
+      const aPrice = parseFloat(a.pricing?.completion || '0');
+      const bPrice = parseFloat(b.pricing?.completion || '0');
+      if (aPrice !== bPrice) return aPrice - bPrice;
+      return (a.name || a.id || '').localeCompare(b.name || b.id || '');
+    });
+    return arr;
+  }, [models]);
+
+  // After-filter list shown in the dropdown. NO arbitrary slice — show
+  // all matches and rely on the scrollable container.
   const filteredModels = useMemo(() => {
     const q = modelQuery.toLowerCase().trim();
-    return (q
-      ? models.filter(m =>
-          (m.id || '').toLowerCase().includes(q) ||
-          (m.name || '').toLowerCase().includes(q)
-        )
-      : models
-    ).slice(0, 50);
-  }, [models, modelQuery]);
+    return sortedModels.filter(m => {
+      if (modelFilter === 'free' && !isFreeTier(m)) return false;
+      if (modelFilter === 'paid' && isFreeTier(m)) return false;
+      if (!q) return true;
+      return (
+        (m.id || '').toLowerCase().includes(q) ||
+        (m.name || '').toLowerCase().includes(q)
+      );
+    });
+  }, [sortedModels, modelQuery, modelFilter]);
+
+  // Counts for the chip labels — let the user see at a glance how many
+  // free vs paid models are available with their current key/tier.
+  const freeCount = useMemo(() => sortedModels.filter(isFreeTier).length, [sortedModels]);
+  const paidCount = sortedModels.length - freeCount;
 
   const recentModels = useMemo(
     () => recent.map(id => models.find(m => m.id === id)).filter((m): m is any => Boolean(m)),
@@ -97,13 +144,60 @@ export const LmProviderPanel: React.FC = () => {
     return `$${(n * 1e6).toFixed(2)}/M`;
   };
 
-  const isFreeTier = (m: any): boolean => {
-    if (!m?.pricing) return false;
-    const promptCost = parseFloat(m.pricing.prompt || '0');
-    const completionCost = parseFloat(m.pricing.completion || '0');
-    return Number.isFinite(promptCost) && Number.isFinite(completionCost) &&
-           promptCost === 0 && completionCost === 0;
+  // Detect interesting traits to surface as visual badges on each card.
+  // Keeps the picker scannable: at a glance you see whether a model is free,
+  // a reasoning model, multimodal, or a high-end frontier model.
+  const hasReasoning = (m: any): boolean => {
+    const params: unknown[] = m?.supported_parameters || [];
+    return params.some(p =>
+      typeof p === 'string' && (p === 'reasoning' || p === 'include_reasoning')
+    );
   };
+  const hasVision = (m: any): boolean => {
+    const inputs: unknown[] = m?.architecture?.input_modalities || [];
+    if (inputs.some(i => typeof i === 'string' && i === 'image')) return true;
+    // Older /v1/models payloads expose `architecture.modality` like
+    // 'text+image->text'. Fall back to substring match for those.
+    const modality = m?.architecture?.modality;
+    return typeof modality === 'string' && modality.includes('image');
+  };
+  // Frontier ≈ premium pricing tier. OpenRouter doesn't expose a "frontier"
+  // flag — we approximate: output ≥ $10/M tokens. Captures Claude Opus,
+  // GPT-4 Turbo / GPT-5 family, Gemini 2.5 Pro etc. and excludes mid-tier
+  // models like Llama / DeepSeek / Mistral that sit at $0.15-2/M.
+  const isFrontier = (m: any): boolean => {
+    if (isFreeTier(m)) return false;
+    const completion = parseFloat(m?.pricing?.completion || '0');
+    return Number.isFinite(completion) && completion >= 10e-6; // ≥ $10 per 1M tokens
+  };
+
+  // Renders the trait badges next to a model name. Order is fixed
+  // (FREE / FRONTIER / THINK / VISION) so the same model always looks the
+  // same regardless of which list it shows up in.
+  const renderBadges = (m: any) => (
+    <>
+      {isFreeTier(m) && (
+        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-green-500/20 text-green-700 dark:bg-green-500/30 dark:text-green-300 border border-green-500/40">
+          FREE
+        </span>
+      )}
+      {isFrontier(m) && (
+        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:bg-amber-500/30 dark:text-amber-300 border border-amber-500/40" title="Frontier-tier pricing — top-end model from a major provider">
+          FRONTIER
+        </span>
+      )}
+      {hasReasoning(m) && (
+        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-700 dark:bg-purple-500/30 dark:text-purple-300 border border-purple-500/40" title="Supports reasoning / chain-of-thought output">
+          THINK
+        </span>
+      )}
+      {hasVision(m) && (
+        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-700 dark:bg-sky-500/30 dark:text-sky-300 border border-sky-500/40" title="Accepts image input (multimodal)">
+          VISION
+        </span>
+      )}
+    </>
+  );
 
   // Effective values for textareas (default text rendered as initial value)
   const valueGen = cfg.systemPromptGenerate || DEFAULT_GENERATE_PROMPT;
@@ -193,7 +287,33 @@ export const LmProviderPanel: React.FC = () => {
           </p>
         )}
         {modelPickerOpen && (
-          <div className="mt-1 max-h-64 overflow-y-auto border border-zinc-200 dark:border-white/10 rounded bg-white dark:bg-zinc-900">
+          <div className="mt-1 max-h-72 overflow-y-auto border border-zinc-200 dark:border-white/10 rounded bg-white dark:bg-zinc-900">
+            {/* Filter chips. Sticky to keep them visible while the user scrolls
+                through the (potentially 300+) full model list. Shows total
+                count in each tier so the user knows what's available. */}
+            <div className="sticky top-0 z-10 flex items-center gap-1 px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border-b border-zinc-200 dark:border-white/10">
+              {([
+                ['all',  `${t('lmProvider.modelPicker.filterAll') || 'All'} (${sortedModels.length})`],
+                ['free', `${t('lmProvider.modelPicker.filterFree') || 'Free'} (${freeCount})`],
+                ['paid', `${t('lmProvider.modelPicker.filterPaid') || 'Paid'} (${paidCount})`],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setModelFilter(key)}
+                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                    modelFilter === key
+                      ? 'bg-pink-600 border-pink-600 text-white'
+                      : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-white/10 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-white/5'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="ml-auto text-[10px] text-zinc-500">
+                {filteredModels.length} {t('lmProvider.modelPicker.shown') || 'shown'}
+              </span>
+            </div>
             {recentModels.length > 0 && (
               <>
                 <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-500 bg-zinc-50 dark:bg-zinc-800">
@@ -206,13 +326,9 @@ export const LmProviderPanel: React.FC = () => {
                     type="button"
                     className="w-full text-left px-2 py-1 text-xs hover:bg-zinc-100 dark:hover:bg-white/5"
                   >
-                    <div className="font-medium flex items-center gap-1.5">
+                    <div className="font-medium flex items-center gap-1.5 flex-wrap">
                       <span className="truncate">{m.name || m.id}</span>
-                      {isFreeTier(m) && (
-                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-green-500/20 text-green-700 dark:bg-green-500/30 dark:text-green-300 border border-green-500/40">
-                          FREE
-                        </span>
-                      )}
+                      {renderBadges(m)}
                     </div>
                     <div className="text-[10px] text-zinc-500">
                       {isFreeTier(m)
@@ -236,13 +352,9 @@ export const LmProviderPanel: React.FC = () => {
                     type="button"
                     className="w-full text-left px-2 py-1 text-xs hover:bg-zinc-100 dark:hover:bg-white/5"
                   >
-                    <div className="font-medium flex items-center gap-1.5">
+                    <div className="font-medium flex items-center gap-1.5 flex-wrap">
                       <span className="truncate">{m.name || m.id}</span>
-                      {isFreeTier(m) && (
-                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-green-500/20 text-green-700 dark:bg-green-500/30 dark:text-green-300 border border-green-500/40">
-                          FREE
-                        </span>
-                      )}
+                      {renderBadges(m)}
                     </div>
                     <div className="text-[10px] text-zinc-500">
                       {isFreeTier(m)
