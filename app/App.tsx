@@ -110,6 +110,39 @@ function AppContent() {
   const incrementPendingClicks = useCallback((n = 1) => setPendingClickCount(c => c + n), []);
   const decrementPendingClicks = useCallback((n = 1) => setPendingClickCount(c => Math.max(0, c - n)), []);
 
+  // Instant temp-song factory — called from CreatePanel at click time so the
+  // user sees a card in the list IMMEDIATELY, then it's promoted with real
+  // data when LLM pre-flight + POST complete. Returns the tempId so the
+  // caller can stash it on the eventual `onGenerate` payload (`_tempId`).
+  const createTempSongForClick = useCallback((descriptionPreview: string): string => {
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const tempSong: Song = {
+      id: tempId,
+      title: descriptionPreview.slice(0, 60) || 'Generating…',
+      lyrics: '',
+      style: '',
+      coverUrl: 'https://picsum.photos/200/200?blur=10',
+      duration: '--:--',
+      createdAt: new Date(),
+      isGenerating: true,
+      stage: 'Queued…',
+      tags: ['queued'],
+      isPublic: true,
+    };
+    setSongs(prev => [tempSong, ...prev]);
+    return tempId;
+  }, []);
+
+  // Update placeholder fields as LLM streams data, e.g. style/lyrics.
+  const updateTempSongForClick = useCallback((tempId: string, patch: Partial<Song>) => {
+    setSongs(prev => prev.map(s => s.id === tempId ? { ...s, ...patch } : s));
+  }, []);
+
+  // Failure path — drop the placeholder so the user doesn't see a stuck "Queued…"
+  const removeTempSongForClick = useCallback((tempId: string) => {
+    setSongs(prev => prev.filter(s => s.id !== tempId));
+  }, []);
+
   // Theme State
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     const stored = localStorage.getItem('theme');
@@ -952,24 +985,39 @@ function AppContent() {
     setCurrentView('create');
     setMobileShowList(false);
 
-    // Create unique temp ID for this job
-    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const tempSong: Song = {
-      id: tempId,
-      title: params.title || t('generating') || 'Generating...',
-      lyrics: '',
-      style: params.style,
-      coverUrl: 'https://picsum.photos/200/200?blur=10',
-      duration: '--:--',
-      createdAt: new Date(),
-      isGenerating: true,
-      tags: params.customMode ? ['custom'] : ['simple'],
-      isPublic: true
-    };
-
-    setSongs(prev => [tempSong, ...prev]);
-    setSelectedSong(tempSong);
-    setShowRightSidebar(true);
+    // If CreatePanel already created an instant placeholder card via
+    // createTempSongForClick (so the user sees something AT click time, not
+    // after the 20s LLM pre-flight), reuse that card. Otherwise create one
+    // here as before.
+    const preCreatedId = (params as any)._tempId as string | undefined;
+    const tempId = preCreatedId || `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    if (preCreatedId) {
+      // Promote the placeholder with whatever metadata the pre-flight produced.
+      setSongs(prev => prev.map(s => s.id === tempId ? {
+        ...s,
+        title: params.title || s.title,
+        style: params.style || s.style,
+        tags: params.customMode ? ['custom'] : ['simple'],
+        stage: t('startingTrack') || 'Starting track…',
+      } : s));
+      setSelectedSong(prev => prev?.id === tempId ? { ...prev, title: params.title || prev.title, style: params.style || prev.style } : prev);
+    } else {
+      const tempSong: Song = {
+        id: tempId,
+        title: params.title || t('generating') || 'Generating...',
+        lyrics: '',
+        style: params.style,
+        coverUrl: 'https://picsum.photos/200/200?blur=10',
+        duration: '--:--',
+        createdAt: new Date(),
+        isGenerating: true,
+        tags: params.customMode ? ['custom'] : ['simple'],
+        isPublic: true
+      };
+      setSongs(prev => [tempSong, ...prev]);
+      setSelectedSong(tempSong);
+      setShowRightSidebar(true);
+    }
 
     try {
       // Simple mode: LLM generates caption + lyrics + metadata from description
@@ -1573,6 +1621,9 @@ function AppContent() {
                 waitForJobsToDrain={waitForJobsToDrain}
                 incrementPendingClicks={incrementPendingClicks}
                 decrementPendingClicks={decrementPendingClicks}
+                createTempSongForClick={createTempSongForClick}
+                updateTempSongForClick={updateTempSongForClick}
+                removeTempSongForClick={removeTempSongForClick}
               />
             </div>
             {leftPanel.handle}

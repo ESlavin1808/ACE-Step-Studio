@@ -46,10 +46,16 @@ interface CreatePanelProps {
   /** Bump the parent's "pending click" counter synchronously the moment the
    *  user clicks Создать, so the N/10 badge shows instantly even though
    *  LLM pre-flight + POST will take seconds. */
-  incrementPendingClicks?: () => void;
+  incrementPendingClicks?: (n?: number) => void;
   /** Decrement when the click has handed off to a real active job (or
    *  failed) — pairs 1:1 with incrementPendingClicks. */
-  decrementPendingClicks?: () => void;
+  decrementPendingClicks?: (n?: number) => void;
+  /** Create an instant placeholder song card at click time. Returns the
+   *  temp id so the caller can pass it through onGenerate as `_tempId` and
+   *  reuse the same card instead of creating a duplicate. */
+  createTempSongForClick?: (descriptionPreview: string) => string;
+  updateTempSongForClick?: (tempId: string, patch: Partial<Song>) => void;
+  removeTempSongForClick?: (tempId: string) => void;
 }
 
 const KEY_SIGNATURES = [
@@ -145,6 +151,9 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   waitForJobsToDrain,
   incrementPendingClicks,
   decrementPendingClicks,
+  createTempSongForClick,
+  updateTempSongForClick,
+  removeTempSongForClick,
 }) => {
   const { isAuthenticated, token, user } = useAuth();
   const { t } = useI18n();
@@ -1493,10 +1502,21 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     // polling. Early-return / failure paths release the slot manually.
     const slotsClaimed = bulkCount;
     incrementPendingClicks?.(slotsClaimed);
+    // Create a visible placeholder card per bulk variant — instant feedback.
+    const tempIds: string[] = [];
+    if (createTempSongForClick) {
+      const previewBase = (customMode ? (title || style || lyrics || 'Track') : (songDescription || 'Track')).slice(0, 60);
+      for (let i = 0; i < slotsClaimed; i++) {
+        const preview = slotsClaimed > 1 ? `${previewBase} (${i + 1})` : previewBase;
+        tempIds.push(createTempSongForClick(preview));
+      }
+    }
     let claimedSlotsRemaining = slotsClaimed;
     const releaseClaimedSlots = () => {
       if (claimedSlotsRemaining > 0) {
         decrementPendingClicks?.(claimedSlotsRemaining);
+        // Remove any placeholder cards that never got promoted to real jobs.
+        if (removeTempSongForClick) tempIds.forEach(id => removeTempSongForClick(id));
         claimedSlotsRemaining = 0;
       }
     };
@@ -1586,7 +1606,11 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
 
       // Simple mode: use only songDescription + safe defaults, ignore custom mode settings
       // Custom mode: use all user-configured parameters
+      // Pass the pre-created placeholder tempId so App.tsx promotes it instead
+      // of creating a duplicate card.
+      const tempIdForThisJob = tempIds[i];
       onGenerate(effectiveCustomMode ? {
+        _tempId: tempIdForThisJob,
         customMode: true,
         prompt: effLyrics,
         lyrics: effLyrics,
@@ -1700,6 +1724,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         loraLoaded,
       } : {
         // Simple mode — isolated defaults, no custom mode bleed-through
+        _tempId: tempIdForThisJob,
         customMode: false,
         songDescription,
         prompt: songDescription,
