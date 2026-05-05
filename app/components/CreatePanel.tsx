@@ -1535,7 +1535,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     // We spawn a fresh OpenRouterProvider per click instead.
     if (!customMode && useOpenRouter && !activeLmModel) {
       if (!songDescription.trim()) { releaseClaimedSlots(); return; }
-      llmPreflightQueueRef.current = llmPreflightQueueRef.current.then(async () => {
+      // CRITICAL: `.catch(() => null)` BEFORE `.then` is the chain firewall —
+      // it absorbs any rejection from the previous chain step so the FIFO
+      // ref stays usable. Without it, one bad pre-flight permanently rejects
+      // the chain and every future click inherits the rejection (LLM never
+      // runs until reload).
+      llmPreflightQueueRef.current = llmPreflightQueueRef.current.catch(() => null).then(async () => {
         if (waitForJobsToDrain) {
           try { await waitForJobsToDrain(); } catch { /* drain failures don't block our turn */ }
         }

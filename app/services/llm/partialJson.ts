@@ -2,11 +2,11 @@ import { parse, Allow } from 'partial-json';
 import type { SongDraft } from './types';
 
 const SONG_FIELDS: (keyof SongDraft)[] = [
-  'title', 'caption', 'lyrics', 'tags', 'bpm', 'keyScale', 'timeSignature', 'durationSec',
+  'title', 'caption', 'lyrics', 'tags', 'bpm', 'keyScale', 'timeSignature', 'durationSec', 'coverPrompt',
 ];
 
 const STRING_FIELDS: (keyof SongDraft)[] = [
-  'title', 'caption', 'lyrics', 'keyScale', 'timeSignature',
+  'title', 'caption', 'lyrics', 'keyScale', 'timeSignature', 'coverPrompt',
 ];
 
 export interface PartialResult {

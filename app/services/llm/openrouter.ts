@@ -290,6 +290,12 @@ export class OpenRouterProvider {
     let draft: SongDraft;
     try {
       draft = JSON.parse(stripCodeFence(raw));
+      // Tolerate models / stale custom system prompts that don't emit `coverPrompt`
+      // (the field was added later). Empty string is a valid value per types.ts;
+      // the keyword fallback in buildCoverPrompt fills in for cover gen.
+      if (typeof (draft as any).coverPrompt !== 'string') {
+        (draft as any).coverPrompt = '';
+      }
     } catch {
       if (attempt === 0) {
         const fallback: ChatMessage[] = [

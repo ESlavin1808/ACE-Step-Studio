@@ -824,7 +824,13 @@ function AppContent() {
     setSongs(prev => prev.filter(s => !tempIds.has(s.id)));
     setActiveJobCount(0);
     setIsGenerating(false);
-  }, [token]);
+    // Wake up any pre-flight clicks that were waiting for this drained queue.
+    // Without this, after cancel-all the FIFO chain stays parked forever and
+    // the next click hangs on waitForJobsToDrain → no LLM ever fires.
+    drainQueueWaiters();
+    // Reset the visual click-pending counter too — same reasoning.
+    setPendingClickCount(0);
+  }, [token, drainQueueWaiters]);
 
   // Hard reset — cancel + interrupt GPU generation
   const resetGeneration = useCallback(async () => {
@@ -1025,7 +1031,10 @@ function AppContent() {
       let enrichedParams = { ...params };
       if (!params.customMode && params.songDescription && token) {
         try {
-          setSongs(prev => prev.map(s => s.id === tempId ? { ...s, stage: t('writingLyricsAndStyle') || 'Writing lyrics & style...' } : s));
+          // Use the i18n KEY here (SongList does t(song.stage)) so the label
+          // tracks language switches mid-generation. Storing the resolved
+          // string would freeze the label in the locale active at click time.
+          setSongs(prev => prev.map(s => s.id === tempId ? { ...s, stage: 'writingLyricsAndStyle' } : s));
           const sample = await generateApi.createSample({
             query: params.songDescription,
             instrumental: params.instrumental,
@@ -1049,11 +1058,13 @@ function AppContent() {
             setSongs(prev => prev.map(s => s.id === tempId ? { ...s, title: String(sample.caption || '').slice(0, 50) || s.title, style: String(sample.caption || '') } : s));
           }
         } catch (err) {
-          // create_sample failed — block generation, remove temp song
+          // create_sample failed — block generation, remove temp song.
+          // Release the pending-click slot so the N/10 badge doesn't stick.
           console.error('[Simple] create_sample failed:', err);
           setSongs(prev => prev.filter(s => s.id !== tempId));
           showToast('LLM not available — model may be loading or Gradio restarting. Wait and try again.', 'error');
           setIsGenerating(false);
+          decrementPendingClicks(1);
           return;
         }
       }
@@ -1130,11 +1141,33 @@ function AppContent() {
         repaintMode: params.repaintMode,
         repaintStrength: params.repaintStrength,
         ditModel: params.ditModel,
+        // Fields the CreatePanel customPayload IIFE builds but the legacy
+        // whitelist was dropping silently — DCW + FlowEdit clusters, retake
+        // controls, lora flag, prompt alias. Recovered via review (agent10
+        // §2). Cast through `any` because the shared GenerationParams
+        // interfaces drift (App-level vs api.ts vs server) — see review.
+        prompt: (params as any).prompt,
+        dcwEnabled: (params as any).dcwEnabled,
+        dcwMode: (params as any).dcwMode,
+        dcwScaler: (params as any).dcwScaler,
+        dcwHighScaler: (params as any).dcwHighScaler,
+        dcwWavelet: (params as any).dcwWavelet,
+        retakeSeed: (params as any).retakeSeed,
+        retakeVariance: (params as any).retakeVariance,
+        flowEditMorph: (params as any).flowEditMorph,
+        flowEditSourceCaption: (params as any).flowEditSourceCaption,
+        flowEditSourceLyrics: (params as any).flowEditSourceLyrics,
+        flowEditNMin: (params as any).flowEditNMin,
+        flowEditNMax: (params as any).flowEditNMax,
+        flowEditNAvg: (params as any).flowEditNAvg,
+        loraLoaded: (params as any).loraLoaded,
         // OpenRouter — model id used for the AI lyric/caption run (persisted on song row).
         openrouterModel: (params as any).openrouterModel,
         // Pollinations.ai cover-gen config — opaque blob mirrored to backend.
         pollinations: (params as any).pollinations,
-      }, token);
+        // Pre-created placeholder card id (instant feedback at click time).
+        _tempId: (params as any)._tempId,
+      } as any, token);
 
       // Store jobId on the temp song so cancel button works
       setSongs(prev => prev.map(s => s.id === tempId ? { ...s, jobId: job.jobId } : s));

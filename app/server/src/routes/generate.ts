@@ -26,7 +26,6 @@ import { tagMp3Buffer, fetchCoverImage, type PollinationsCoverConfig } from '../
 import {
   startCoverGen,
   consumeCoverState,
-  awaitCoverWithTimeout,
   getCoverState,
 } from '../services/cover-jobs.js';
 
@@ -522,13 +521,17 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
       try {
         const aceStatus = await getJobStatus(job.acestep_task_id);
 
-        // First time we see this job in flight (running or already succeeded
-        // with no cover yet) — kick off Pollinations cover gen if not already
-        // started. We can't rely solely on the queued→running transition: if
-        // the audio job completes between two polls, we'd miss it. Idempotent
-        // via getCoverState() guard.
+        // First time we see this job in flight — kick off Pollinations cover
+        // gen. ONLY on `running` (not `succeeded`): if we also fired on the
+        // `succeeded` status, then after `attachCover.finally` runs
+        // `consumeCoverState(jobId)` the entry is gone, and the next poll
+        // (still seeing `succeeded`) would re-fire a brand-new cover gen
+        // (= burns Pollinations quota + leaks bytes).
+        // The "missed transition" risk is bounded: ACE-Step turbo audio takes
+        // 30+s and we poll every 2s, so we'll always catch at least one
+        // `running` poll between queued and succeeded.
         if (
-          (aceStatus.status === 'running' || aceStatus.status === 'succeeded') &&
+          aceStatus.status === 'running' &&
           !getCoverState(req.params.jobId)
         ) {
           const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
@@ -693,6 +696,11 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                   ]
                 );
                 localPaths.push(audioUrl);
+                // Track even fallback songs so the cover-attach loop can
+                // UPDATE their cover_url when Pollinations finishes
+                // (downloads can fail but the song row exists with the
+                // remote MP3 URL — covers still apply).
+                insertedSongIds.push(songId);
               }
             }
 
@@ -781,6 +789,11 @@ router.post('/cancel/:jobId', authMiddleware, async (req: AuthenticatedRequest, 
     // Cancel in the acestep queue
     const cancelled = cancelJob(jobId);
 
+    // Drop any in-flight cover-gen entry — without this the entry stays in the
+    // map forever (memory leak) and a stale Promise.then() may still write a
+    // cover_url for a song row that is now in `failed` state (or never INSERTed).
+    consumeCoverState(jobId);
+
     // Also update DB status
     await pool.query(
       `UPDATE generation_jobs SET status = 'failed', error = 'Cancelled by user', updated_at = datetime('now')
@@ -801,6 +814,15 @@ router.post('/cancel-all', authMiddleware, async (req: AuthenticatedRequest, res
     // Cancel all in the acestep queue
     const count = cancelAllJobs();
 
+    // Drop in-flight cover-gen entries for this user's jobs so we don't leak
+    // map slots. Read pending/running jobs first so we know which keys to drop.
+    const inFlight = await pool.query(
+      `SELECT id FROM generation_jobs
+       WHERE user_id = ? AND status IN ('queued', 'running', 'pending')`,
+      [req.user!.id]
+    );
+    for (const row of inFlight.rows) consumeCoverState(row.id);
+
     // Also update DB
     const result = await pool.query(
       `UPDATE generation_jobs SET status = 'failed', error = 'Cancelled by user', updated_at = datetime('now')
@@ -820,6 +842,14 @@ router.post('/reset', authMiddleware, async (req: AuthenticatedRequest, res: Res
   try {
     // 1. Cancel all queued jobs
     cancelAllJobs();
+
+    // Drop in-flight cover-gen entries (same reason as /cancel-all)
+    const inFlight = await pool.query(
+      `SELECT id FROM generation_jobs
+       WHERE user_id = ? AND status IN ('queued', 'running', 'pending')`,
+      [req.user!.id]
+    );
+    for (const row of inFlight.rows) consumeCoverState(row.id);
 
     // 2. Update DB
     await pool.query(
