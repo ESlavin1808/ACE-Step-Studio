@@ -56,6 +56,10 @@ interface CreatePanelProps {
   createTempSongForClick?: (descriptionPreview: string) => string;
   updateTempSongForClick?: (tempId: string, patch: Partial<Song>) => void;
   removeTempSongForClick?: (tempId: string) => void;
+  /** Register an AbortController for the in-flight OpenRouter pre-flight call
+   *  so the parent's cancel-button (single + cancel-all) can abort it. */
+  registerPreflightAbort?: (tempId: string, ac: AbortController) => void;
+  unregisterPreflightAbort?: (tempId: string) => void;
 }
 
 const KEY_SIGNATURES = [
@@ -154,6 +158,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   createTempSongForClick,
   updateTempSongForClick,
   removeTempSongForClick,
+  registerPreflightAbort,
+  unregisterPreflightAbort,
 }) => {
   const { isAuthenticated, token, user } = useAuth();
   const { t } = useI18n();
@@ -1551,9 +1557,23 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         if (updateTempSongForClick) {
           tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageGeneratingTextOpenRouter' }));
         }
+        const ac = new AbortController();
+        // Hard timeout — OpenRouter sometimes hangs (rate-limit, model
+        // outage, network drop) and the user is left with a stuck card
+        // and no way out. 90 s is generous for any thinking model + buffer
+        // for streaming response; longer than that means the call is
+        // effectively dead. AbortController.abort() drops the fetch and
+        // throws AbortError out of client.generate(), which we catch below.
+        const timeoutId = setTimeout(() => ac.abort(), 90_000);
+        // Register so the user-facing cancel button (SongList row + Cancel-all)
+        // can abort the in-flight HTTP request. We register against the FIRST
+        // tempId of the bulk batch — if the user cancels we abort the whole
+        // batch (Promise rejects → all tempIds get released together).
+        if (tempIds[0] && registerPreflightAbort) {
+          registerPreflightAbort(tempIds[0], ac);
+        }
         try {
           const client = new OpenRouterProvider();
-          const ac = new AbortController();
           return await client.generate(
             {
               topic: songDescription,
@@ -1565,9 +1585,21 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
             },
             { signal: ac.signal, onEvent: () => {} },
           );
-        } catch (e) {
-          console.error('[Simple+OR] pre-flight failed:', e);
+        } catch (e: any) {
+          if (e?.name === 'AbortError' || ac.signal.aborted) {
+            // Either user-clicked-cancel or our 90 s timeout fired. Either
+            // way the chain step bails — the catch in the awaiting block
+            // below releases slots and removes the placeholder card.
+            console.warn('[Simple+OR] pre-flight aborted (cancel or timeout)');
+          } else {
+            console.error('[Simple+OR] pre-flight failed:', e);
+          }
           return null;
+        } finally {
+          clearTimeout(timeoutId);
+          if (tempIds[0] && unregisterPreflightAbort) {
+            unregisterPreflightAbort(tempIds[0]);
+          }
         }
       });
       try {

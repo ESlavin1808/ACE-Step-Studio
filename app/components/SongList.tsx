@@ -423,8 +423,22 @@ export const SongList: React.FC<SongListProps> = ({
                                     onSongUpdate={onSongUpdate}
                                     onUseAsReference={() => onUseAsReference?.(item.song)}
                                     onCoverSong={() => onCoverSong?.(item.song)}
-                                    onCancelJob={item.song.isGenerating && item.song.jobId ? () => onCancelJob?.(item.song.jobId!) : undefined}
-                                    onResetJob={item.song.stage === 'cancelled' && item.song.jobId ? () => onResetJob?.(item.song.jobId!) : undefined}
+                                    // Cancel button is also available during pre-flight (placeholder
+                                    // card with no jobId yet) — pass `song.id` (= tempId) and the
+                                    // App.tsx handler routes to the registered AbortController.
+                                    onCancelJob={
+                                      item.song.isGenerating
+                                        ? () => onCancelJob?.(item.song.jobId || item.song.id)
+                                        : undefined
+                                    }
+                                    // Reset works for both real-job and pre-flight cancelled cards
+                                    // (pre-flight cancel sets stage='cancelled' too, no jobId needed
+                                    // — Reset just removes the placeholder).
+                                    onResetJob={
+                                      item.song.stage === 'cancelled'
+                                        ? () => onResetJob?.(item.song.jobId || item.song.id)
+                                        : undefined
+                                    }
                                 />
                             ) : (
                                 <UploadItem

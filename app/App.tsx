@@ -109,6 +109,21 @@ function AppContent() {
   // active job (beginPollingJob has registered it in activeJobsRef).
   const [pendingClickCount, setPendingClickCount] = useState(0);
   const incrementPendingClicks = useCallback((n = 1) => setPendingClickCount(c => c + n), []);
+
+  // Pre-flight AbortController registry, keyed by the placeholder card's
+  // tempId. CreatePanel registers a controller right before it starts the
+  // OpenRouter pre-flight call; the cancel buttons (single + cancel-all)
+  // pull from here to actually abort the in-flight HTTP request, otherwise
+  // the user's only escape is reloading the page (the Promise chain that
+  // park clicks via `waitForJobsToDrain` doesn't have an abort path of
+  // its own — see handoff "Open issue #1").
+  const preflightAbortersRef = useRef<Map<string, AbortController>>(new Map());
+  const registerPreflightAbort = useCallback((tempId: string, ac: AbortController) => {
+    preflightAbortersRef.current.set(tempId, ac);
+  }, []);
+  const unregisterPreflightAbort = useCallback((tempId: string) => {
+    preflightAbortersRef.current.delete(tempId);
+  }, []);
   const decrementPendingClicks = useCallback((n = 1) => setPendingClickCount(c => Math.max(0, c - n)), []);
 
   // Instant temp-song factory — called from CreatePanel at click time so the
@@ -775,11 +790,42 @@ function AppContent() {
     drainQueueWaiters();
   }, []);
 
-  // Cancel a single generation job (soft — stops polling, keeps card visible)
-  const cancelGeneration = useCallback(async (jobId: string) => {
+  // Cancel a single generation. The `id` may be either:
+  //  - a backend jobId (track is past pre-flight, audio gen is running) → POST /cancel
+  //  - a pre-flight tempId (still in OpenRouter LLM call, no jobId yet)  → abort the
+  //    registered AbortController, drop the placeholder card, release slot
+  //
+  // We unify both paths under one handler because the SongList row only knows
+  // `song.id` (= tempId) and `song.jobId`; a pre-flight card has tempId but
+  // no jobId, so the cancel button passes whatever it has and we figure it
+  // out here.
+  const cancelGeneration = useCallback(async (id: string) => {
     if (!token) return;
+
+    // First check: is this a pre-flight tempId? If so, abort and bail —
+    // there's no backend job yet to call /cancel on.
+    const preflightAc = preflightAbortersRef.current.get(id);
+    if (preflightAc) {
+      preflightAc.abort();
+      preflightAbortersRef.current.delete(id);
+      // Mark the placeholder as cancelled so the user can hit Reset (X)
+      // to remove it. Same pattern as the audio-cancel branch below.
+      setSongs(prev => prev.map(s =>
+        s.id === id ? { ...s, isGenerating: false, stage: 'cancelled' } : s
+      ));
+      // Release the slot the click claimed; without this the N/10 badge
+      // stays inflated.
+      decrementPendingClicks(1);
+      // Wake any other parked pre-flight in the FIFO chain so it can take
+      // its turn. The chain itself doesn't re-enter `waitForJobsToDrain`
+      // for the same click, but other queued clicks may be waiting.
+      drainQueueWaiters();
+      return;
+    }
+
+    // Otherwise treat as a backend jobId.
     try {
-      await fetch(`/api/generate/cancel/${jobId}`, {
+      await fetch(`/api/generate/cancel/${id}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -789,10 +835,10 @@ function AppContent() {
     // Remove the job from activeJobsRef so waitForJobsToDrain can resolve;
     // without this, the cancelled job sits there forever blocking every
     // subsequent click's pre-flight from starting.
-    const jobData = activeJobsRef.current.get(jobId);
+    const jobData = activeJobsRef.current.get(id);
     if (jobData) {
       clearInterval(jobData.pollInterval);
-      activeJobsRef.current.delete(jobId);
+      activeJobsRef.current.delete(id);
       setActiveJobCount(activeJobsRef.current.size);
       if (activeJobsRef.current.size === 0) setIsGenerating(false);
       drainQueueWaiters();
@@ -801,12 +847,33 @@ function AppContent() {
         s.id === jobData.tempId ? { ...s, isGenerating: false, stage: 'cancelled' } : s
       ));
     }
-  }, [token, drainQueueWaiters]);
+  }, [token, drainQueueWaiters, decrementPendingClicks]);
 
-  // Reset a single job — hard cancel (interrupt Gradio GPU + remove card)
-  const resetSingleJob = useCallback(async (jobId: string) => {
+  // Reset a single job — hard cancel (interrupt Gradio GPU + remove card).
+  // `id` may be either a backend jobId or a pre-flight tempId (placeholder
+  // that was already cancelled at pre-flight time and now sits with stage
+  // 'cancelled'). Pre-flight reset is just card removal — there's no GPU
+  // job to interrupt.
+  const resetSingleJob = useCallback(async (id: string) => {
     if (!token) return;
-    // Send cancel to Gradio to interrupt diffusion
+
+    const jobData = activeJobsRef.current.get(id);
+
+    // Pre-flight tempId path — no Gradio call, just drop the card.
+    if (!jobData) {
+      // Defensive: if the placeholder still has an aborter (user clicks
+      // Reset on a card that was never cancelled), abort it now.
+      const ac = preflightAbortersRef.current.get(id);
+      if (ac) {
+        ac.abort();
+        preflightAbortersRef.current.delete(id);
+      }
+      setSongs(prev => prev.filter(s => s.id !== id));
+      drainQueueWaiters();
+      return;
+    }
+
+    // Real-job path — send cancel to Gradio to interrupt diffusion
     try {
       await fetch('/api/generate/reset', {
         method: 'POST',
@@ -814,19 +881,15 @@ function AppContent() {
       });
     } catch { /* ignore */ }
 
-    // Now clean up
-    const jobData = activeJobsRef.current.get(jobId);
-    if (jobData) {
-      activeJobsRef.current.delete(jobId);
-      setSongs(prev => prev.filter(s => s.id !== jobData.tempId));
-      setActiveJobCount(activeJobsRef.current.size);
-      if (activeJobsRef.current.size === 0) {
-        setIsGenerating(false);
-      }
-      // Wake parked pre-flight clicks — without this the FIFO chain hangs
-      // forever and the next click never fires its LLM.
-      drainQueueWaiters();
+    activeJobsRef.current.delete(id);
+    setSongs(prev => prev.filter(s => s.id !== jobData.tempId));
+    setActiveJobCount(activeJobsRef.current.size);
+    if (activeJobsRef.current.size === 0) {
+      setIsGenerating(false);
     }
+    // Wake parked pre-flight clicks — without this the FIFO chain hangs
+    // forever and the next click never fires its LLM.
+    drainQueueWaiters();
   }, [token, drainQueueWaiters]);
 
   // Cancel all generation jobs
@@ -839,13 +902,24 @@ function AppContent() {
       });
     } catch { /* ignore */ }
 
+    // Abort every in-flight pre-flight LLM call. Without this, an
+    // OpenRouter request that's already 15 s into its 60 s response
+    // would still complete after Cancel-all, fire `onGenerate`, and spawn
+    // a new audio job — i.e. cancel-all wouldn't actually cancel.
+    preflightAbortersRef.current.forEach(ac => ac.abort());
+    preflightAbortersRef.current.clear();
+
     // Clean up all active jobs
     activeJobsRef.current.forEach(({ tempId, pollInterval }) => {
       clearInterval(pollInterval);
     });
     const tempIds = new Set([...activeJobsRef.current.values()].map(j => j.tempId));
     activeJobsRef.current.clear();
-    setSongs(prev => prev.filter(s => !tempIds.has(s.id)));
+    // Drop both active-job placeholders AND any pre-flight cards still in
+    // the songs[] (they have isGenerating=true but no jobId yet — match by
+    // `isGenerating && !jobId` so we don't accidentally remove songs that
+    // legitimately just finished).
+    setSongs(prev => prev.filter(s => !tempIds.has(s.id) && !(s.isGenerating && !s.jobId)));
     setActiveJobCount(0);
     setIsGenerating(false);
     // Wake up any pre-flight clicks that were waiting for this drained queue.
@@ -866,13 +940,20 @@ function AppContent() {
       });
     } catch { /* ignore */ }
 
+    // Abort every in-flight pre-flight LLM call (same reason as in
+    // cancelAllGenerations — without this, the OR request keeps running
+    // and would spawn a new audio job after Reset-all).
+    preflightAbortersRef.current.forEach(ac => ac.abort());
+    preflightAbortersRef.current.clear();
+
     // Clean up all active jobs
     activeJobsRef.current.forEach(({ tempId, pollInterval }) => {
       clearInterval(pollInterval);
     });
     const tempIds = new Set([...activeJobsRef.current.values()].map(j => j.tempId));
     activeJobsRef.current.clear();
-    setSongs(prev => prev.filter(s => !tempIds.has(s.id)));
+    // Drop active-job placeholders AND any pre-flight cards (no jobId yet).
+    setSongs(prev => prev.filter(s => !tempIds.has(s.id) && !(s.isGenerating && !s.jobId)));
     setActiveJobCount(0);
     setIsGenerating(false);
     // Mirror cancelAllGenerations: wake parked pre-flight clicks and reset the
@@ -1710,6 +1791,8 @@ function AppContent() {
                 createTempSongForClick={createTempSongForClick}
                 updateTempSongForClick={updateTempSongForClick}
                 removeTempSongForClick={removeTempSongForClick}
+                registerPreflightAbort={registerPreflightAbort}
+                unregisterPreflightAbort={unregisterPreflightAbort}
               />
             </div>
             {leftPanel.handle}
