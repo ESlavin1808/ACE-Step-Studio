@@ -67,10 +67,11 @@ export const PollinationsPanel: React.FC = () => {
 
   const filteredModels = useMemo(() => {
     const q = modelQuery.toLowerCase().trim();
-    return (q
+    // No arbitrary slice — Pollinations now lists 30+ models with auth and the
+    // hard cap was hiding everything past 'sana'. Container scrolls.
+    return q
       ? models.filter(m => m.id.toLowerCase().includes(q) || (m.description || '').toLowerCase().includes(q))
-      : models
-    ).slice(0, 50);
+      : models;
   }, [models, modelQuery]);
 
   const recentModels = useMemo(
