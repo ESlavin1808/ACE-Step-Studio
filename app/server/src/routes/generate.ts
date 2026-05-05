@@ -22,7 +22,7 @@ import {
   resolvePythonPath,
 } from '../services/acestep.js';
 import { getStorageProvider } from '../services/storage/factory.js';
-import { tagMp3Buffer, fetchCoverImage, type PollinationsCoverConfig } from '../services/id3-tagger.js';
+import { tagMp3Buffer, fetchCoverImage, updateMp3Cover, type PollinationsCoverConfig } from '../services/id3-tagger.js';
 import {
   startCoverGen,
   consumeCoverState,
@@ -790,7 +790,30 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     // resolved. The auto-pipeline must NOT overwrite a cover
                     // the user explicitly chose. (Manual save is the intent;
                     // auto fill is best-effort default.)
-                    await pool.query('UPDATE songs SET cover_url = ?, updated_at = datetime(\'now\') WHERE id = ? AND cover_url IS NULL', [url, sid]);
+                    const updateResult = await pool.query('UPDATE songs SET cover_url = ?, updated_at = datetime(\'now\') WHERE id = ? AND cover_url IS NULL', [url, sid]);
+
+                    // Also re-embed the new cover into the MP3's ID3 frame —
+                    // without this the downloaded MP3 keeps showing the
+                    // initial picsum thumbnail (baked in at generate.ts:668)
+                    // forever, even though songs.cover_url already points at
+                    // the Pollinations image. Skipped if (a) the manual modal
+                    // already won the cover_url race (rowCount=0), (b) audio
+                    // is remote-hosted, or (c) the storage provider has no
+                    // read() method — best-effort, never breaks audio gen.
+                    if (updateResult.rowCount > 0) {
+                      try {
+                        const audioRow = await pool.query(`SELECT audio_url FROM songs WHERE id = ?`, [sid]);
+                        const audioUrl: string | null = audioRow.rows?.[0]?.audio_url || null;
+                        if (audioUrl && audioUrl.startsWith('/audio/') && audioUrl.toLowerCase().endsWith('.mp3') && typeof storage.read === 'function') {
+                          const audioKey = audioUrl.replace('/audio/', '');
+                          const mp3Buffer: Buffer = await storage.read(audioKey);
+                          const retagged = updateMp3Cover(mp3Buffer, cover.buffer, cover.mimeType);
+                          await storage.upload(audioKey, retagged, 'audio/mpeg');
+                        }
+                      } catch (id3Err) {
+                        console.warn(`[cover] ID3 re-embed failed for song ${sid}:`, id3Err);
+                      }
+                    }
                   } catch (e) {
                     console.warn(`[cover] attach failed for song ${sid}:`, e);
                   }
