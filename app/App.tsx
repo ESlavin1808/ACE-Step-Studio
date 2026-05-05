@@ -102,6 +102,14 @@ function AppContent() {
     waiters.forEach((r) => r());
   }, []);
 
+  // "Pending click" counter — bumped synchronously the moment the user
+  // clicks Создать, so the button shows N/10 instantly even before the LLM
+  // pre-flight completes. Decremented when the click hands off to a real
+  // active job (beginPollingJob has registered it in activeJobsRef).
+  const [pendingClickCount, setPendingClickCount] = useState(0);
+  const incrementPendingClicks = useCallback(() => setPendingClickCount(c => c + 1), []);
+  const decrementPendingClicks = useCallback(() => setPendingClickCount(c => Math.max(0, c - 1)), []);
+
   // Theme State
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     const stored = localStorage.getItem('theme');
@@ -1551,12 +1559,14 @@ function AppContent() {
               <CreatePanel
                 onGenerate={handleGenerate}
                 isGenerating={isGenerating}
-                activeJobCount={activeJobCount}
+                activeJobCount={activeJobCount + pendingClickCount}
                 initialData={reuseData}
                 createdSongs={songs}
                 pendingAudioSelection={pendingAudioSelection}
                 onAudioSelectionApplied={() => setPendingAudioSelection(null)}
                 waitForJobsToDrain={waitForJobsToDrain}
+                incrementPendingClicks={incrementPendingClicks}
+                decrementPendingClicks={decrementPendingClicks}
               />
             </div>
             {leftPanel.handle}

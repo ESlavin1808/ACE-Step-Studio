@@ -43,6 +43,13 @@ interface CreatePanelProps {
    *  LLM pre-flight + POST happen only after the previous track is fully
    *  done (audio + cover). Resolves immediately when no jobs are active. */
   waitForJobsToDrain?: () => Promise<void>;
+  /** Bump the parent's "pending click" counter synchronously the moment the
+   *  user clicks Создать, so the N/10 badge shows instantly even though
+   *  LLM pre-flight + POST will take seconds. */
+  incrementPendingClicks?: () => void;
+  /** Decrement when the click has handed off to a real active job (or
+   *  failed) — pairs 1:1 with incrementPendingClicks. */
+  decrementPendingClicks?: () => void;
 }
 
 const KEY_SIGNATURES = [
@@ -136,6 +143,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   pendingAudioSelection,
   onAudioSelectionApplied,
   waitForJobsToDrain,
+  incrementPendingClicks,
+  decrementPendingClicks,
 }) => {
   const { isAuthenticated, token, user } = useAuth();
   const { t } = useI18n();
@@ -1475,6 +1484,17 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   let perClickDraft: SongDraft | null = null;
 
   const handleGenerate = async () => {
+    // INSTANT visual feedback — bump the N/10 counter synchronously so the
+    // user sees the click registered before LLM pre-flight kicks in.
+    incrementPendingClicks?.();
+    let pendingDecremented = false;
+    const releasePending = () => {
+      if (pendingDecremented) return;
+      pendingDecremented = true;
+      decrementPendingClicks?.();
+    };
+    // Wrap the whole body so we ALWAYS release on error/early-return paths.
+    try {
     // Simple mode + OpenRouter ON + no local LM = pre-flight: ask OR to expand
     // the user's description into caption/lyrics/metadata, fill the same fields
     // a Custom-mode submission would have, then proceed as Custom.
@@ -1711,6 +1731,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     // Reset bulk count after generation
     if (bulkCount > 1) {
       setBulkCount(1);
+    }
+    } finally {
+      // Always release the pending-click counter, even on error/early-return.
+      // The real activeJobCount has by now been bumped by beginPollingJob
+      // (or, on failure, it just goes back to baseline).
+      releasePending();
     }
   };
 
