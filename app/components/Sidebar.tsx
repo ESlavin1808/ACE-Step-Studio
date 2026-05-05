@@ -153,11 +153,18 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
         <span className="truncate text-zinc-500">{modelShort || '—'}</span>
       </div>
 
-      {/* LM Model */}
-      <div className="flex items-center justify-between text-zinc-600">
-        <span className="text-[9px] text-zinc-600">LM</span>
-        <span className={`text-[9px] truncate ${lmShort ? 'text-zinc-500' : 'text-zinc-600'}`}>{lmShort ? `${lmShort}${lmBackend ? ` (${lmBackend})` : ''}` : 'off'}</span>
-      </div>
+      {/* LM Model — hidden entirely when OpenRouter is the active text
+          provider OR when no local LM is loaded (run-no-lm.bat). The OR
+          row right below already covers the "where text comes from" question
+          so showing 'LM: off' next to a green OR row is just noise. */}
+      {lmShort && !orReady && (
+        <div className="flex items-center justify-between text-zinc-600">
+          <span className="text-[9px] text-zinc-600">LM</span>
+          <span className="text-[9px] truncate text-zinc-500">
+            {`${lmShort}${lmBackend ? ` (${lmBackend})` : ''}`}
+          </span>
+        </div>
+      )}
 
       {/* OpenRouter status */}
       <div className="flex items-center justify-between text-zinc-600" title={orReady ? `OpenRouter ON · ${orCfg!.model}` : (orEnabled ? 'OpenRouter ON, but key/model not set' : 'OpenRouter OFF')}>
