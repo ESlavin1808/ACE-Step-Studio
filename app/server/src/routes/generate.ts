@@ -219,6 +219,22 @@ interface GenerateBody {
   // Model selection
   ditModel?: string;
 
+  // DCW / Retake / FlowEdit / lora — mirrored from frontend GenerationParams
+  dcwEnabled?: boolean;
+  dcwMode?: 'low' | 'high' | 'double' | 'pix';
+  dcwScaler?: number;
+  dcwHighScaler?: number;
+  dcwWavelet?: string;
+  retakeSeed?: number;
+  retakeVariance?: number;
+  flowEditMorph?: boolean;
+  flowEditSourceCaption?: string;
+  flowEditSourceLyrics?: string;
+  flowEditNMin?: number;
+  flowEditNMax?: number;
+  flowEditNAvg?: number;
+  loraLoaded?: boolean;
+
   // OpenRouter
   openrouterModel?: string;
 
@@ -371,6 +387,24 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       ditModel,
       openrouterModel,
       pollinations,
+      // DCW / Retake / FlowEdit / lora — frontend has been forwarding these
+      // for a while, but the backend destructure was dropping them silently
+      // on the floor. Added so the persisted `params` blob actually mirrors
+      // what the user submitted (used by reuse-as-template, audit trails).
+      dcwEnabled,
+      dcwMode,
+      dcwScaler,
+      dcwHighScaler,
+      dcwWavelet,
+      retakeSeed,
+      retakeVariance,
+      flowEditMorph,
+      flowEditSourceCaption,
+      flowEditSourceLyrics,
+      flowEditNMin,
+      flowEditNMax,
+      flowEditNAvg,
+      loraLoaded,
     } = req.body as GenerateBody;
 
     if (!customMode && !songDescription) {
@@ -457,6 +491,21 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       ditModel,
       openrouterModel,
       pollinations,
+      // mirror to persisted params blob
+      dcwEnabled,
+      dcwMode,
+      dcwScaler,
+      dcwHighScaler,
+      dcwWavelet,
+      retakeSeed,
+      retakeVariance,
+      flowEditMorph,
+      flowEditSourceCaption,
+      flowEditSourceLyrics,
+      flowEditNMin,
+      flowEditNMax,
+      flowEditNAvg,
+      loraLoaded,
     };
 
     // Create job record in database
@@ -564,6 +613,10 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
           } else if (aceStatus.status === 'failed' && aceStatus.error) {
             updateQuery += `, error = ?`;
             updateParams.push(aceStatus.error);
+            // Audio gen failed (CUDA OOM, timeout, model error). The cover-jobs
+            // entry never gets consumed by the success-path attachCover, so
+            // drop it here to prevent a Map leak per failed job.
+            consumeCoverState(req.params.jobId);
           }
 
           updateQuery += ` WHERE id = ? AND status = ?`;

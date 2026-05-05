@@ -771,16 +771,23 @@ function AppContent() {
       });
     } catch { /* ignore */ }
 
-    // Stop polling but keep the card (user can click "Reset" next)
+    // Stop polling but keep the card (user can click "Reset" next).
+    // Remove the job from activeJobsRef so waitForJobsToDrain can resolve;
+    // without this, the cancelled job sits there forever blocking every
+    // subsequent click's pre-flight from starting.
     const jobData = activeJobsRef.current.get(jobId);
     if (jobData) {
       clearInterval(jobData.pollInterval);
+      activeJobsRef.current.delete(jobId);
+      setActiveJobCount(activeJobsRef.current.size);
+      if (activeJobsRef.current.size === 0) setIsGenerating(false);
+      drainQueueWaiters();
       // Mark song as cancelled (not generating, show reset option)
       setSongs(prev => prev.map(s =>
         s.id === jobData.tempId ? { ...s, isGenerating: false, stage: 'cancelled' } : s
       ));
     }
-  }, [token]);
+  }, [token, drainQueueWaiters]);
 
   // Reset a single job — hard cancel (interrupt Gradio GPU + remove card)
   const resetSingleJob = useCallback(async (jobId: string) => {
@@ -802,8 +809,11 @@ function AppContent() {
       if (activeJobsRef.current.size === 0) {
         setIsGenerating(false);
       }
+      // Wake parked pre-flight clicks — without this the FIFO chain hangs
+      // forever and the next click never fires its LLM.
+      drainQueueWaiters();
     }
-  }, [token]);
+  }, [token, drainQueueWaiters]);
 
   // Cancel all generation jobs
   const cancelAllGenerations = useCallback(async () => {

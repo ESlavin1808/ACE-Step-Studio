@@ -369,6 +369,30 @@ export interface GenerationParams {
 
   loraLoaded?: boolean;
 
+  // DCW (Differential Correction in Wavelet domain) cluster — already on the
+  // wire today (frontend builds them, App.tsx whitelist forwards them); add
+  // them here so the casts in App.tsx can drop the `as any`.
+  dcwEnabled?: boolean;
+  dcwMode?: 'low' | 'high' | 'double' | 'pix';
+  dcwScaler?: number;
+  dcwHighScaler?: number;
+  dcwWavelet?: string;
+
+  // Retake / Flow-edit — same story.
+  retakeSeed?: number;
+  retakeVariance?: number;
+  flowEditMorph?: boolean;
+  flowEditSourceCaption?: string;
+  flowEditSourceLyrics?: string;
+  flowEditNMin?: number;
+  flowEditNMax?: number;
+  flowEditNAvg?: number;
+
+  // Pre-created placeholder card id from CreatePanel — App.tsx promotes the
+  // existing card instead of creating a duplicate. Underscore-prefixed since
+  // it's a UI tunnel, not an audio-gen knob.
+  _tempId?: string;
+
   // OpenRouter — model id used for the lyric/caption AI run (persisted on song row)
   openrouterModel?: string | null;
 
