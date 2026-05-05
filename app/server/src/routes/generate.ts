@@ -784,7 +784,13 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     const coverKey = `${userId}/covers/${sid}${coverExt}`;
                     await storage.upload(coverKey, cover.buffer, cover.mimeType);
                     const url = storage.getPublicUrl(coverKey);
-                    await pool.query('UPDATE songs SET cover_url = ?, updated_at = datetime(\'now\') WHERE id = ?', [url, sid]);
+                    // `WHERE cover_url IS NULL` — guard against the race where
+                    // the user opened the manual CoverRegenModal mid-generation
+                    // and saved their pick before the auto-pipeline Promise
+                    // resolved. The auto-pipeline must NOT overwrite a cover
+                    // the user explicitly chose. (Manual save is the intent;
+                    // auto fill is best-effort default.)
+                    await pool.query('UPDATE songs SET cover_url = ?, updated_at = datetime(\'now\') WHERE id = ? AND cover_url IS NULL', [url, sid]);
                   } catch (e) {
                     console.warn(`[cover] attach failed for song ${sid}:`, e);
                   }

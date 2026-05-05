@@ -481,8 +481,9 @@ router.post('/:id/regen-cover', authMiddleware, (req: AuthenticatedRequest, res:
       return;
     }
     try {
-      // Verify ownership before touching storage
-      const check = await pool.query('SELECT user_id FROM songs WHERE id = $1', [req.params.id]);
+      // Verify ownership and grab the previous cover_url so we can clean up
+      // an orphaned file when the new upload uses a different extension.
+      const check = await pool.query('SELECT user_id, cover_url FROM songs WHERE id = $1', [req.params.id]);
       if (check.rows.length === 0) {
         res.status(404).json({ error: 'Song not found' });
         return;
@@ -498,7 +499,9 @@ router.post('/:id/regen-cover', authMiddleware, (req: AuthenticatedRequest, res:
 
       // Mirror the auto-pipeline path layout from app/server/src/routes/generate.ts
       // (attachCover): `${userId}/covers/${songId}${ext}`. Storage.upload
-      // overwrites in place, so a re-generate replaces the previous file.
+      // overwrites in place, so a re-generate with the SAME extension replaces
+      // the previous file atomically. Cross-extension uploads are handled
+      // explicitly below so we don't leak orphan files.
       const ext = req.file.mimetype === 'image/png'
         ? '.png'
         : req.file.mimetype === 'image/webp'
@@ -508,6 +511,27 @@ router.post('/:id/regen-cover', authMiddleware, (req: AuthenticatedRequest, res:
       const storage = getStorageProvider();
       await storage.upload(coverKey, req.file.buffer, req.file.mimetype);
       const coverUrl = storage.getPublicUrl(coverKey);
+
+      // If the previous cover was a locally-stored file with a DIFFERENT
+      // extension (e.g. user uploads webp over an existing .jpg), the old
+      // file would otherwise stay orphaned on disk forever. Clean it up.
+      // We only touch local-storage paths (`/audio/*`); remote URLs are
+      // out of scope for this cleanup.
+      const prevUrl: string | null = check.rows[0].cover_url || null;
+      if (prevUrl && prevUrl.startsWith('/audio/') && !prevUrl.startsWith(coverUrl)) {
+        try {
+          const prevKey = prevUrl.replace('/audio/', '');
+          // Avoid deleting the file we just wrote (e.g. local provider may
+          // return an identical key when extension matches — already same path).
+          if (prevKey !== coverKey) {
+            await storage.delete(prevKey);
+          }
+        } catch (delErr) {
+          // Non-fatal — orphan file is a minor disk-space cost, not a
+          // correctness issue.
+          console.warn(`[regen-cover] failed to delete previous cover ${prevUrl}:`, delErr);
+        }
+      }
 
       await pool.query(
         `UPDATE songs SET cover_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
