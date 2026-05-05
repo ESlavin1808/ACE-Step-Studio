@@ -522,13 +522,13 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
       try {
         const aceStatus = await getJobStatus(job.acestep_task_id);
 
-        // queued → running transition: this is the moment to kick off the
-        // Pollinations cover gen for THIS jobId, so it runs in parallel with
-        // the audio render but ONLY for jobs that are actually in flight
-        // (not 10 queued-but-not-yet-started jobs at once).
+        // First time we see this job in flight (running or already succeeded
+        // with no cover yet) — kick off Pollinations cover gen if not already
+        // started. We can't rely solely on the queued→running transition: if
+        // the audio job completes between two polls, we'd miss it. Idempotent
+        // via getCoverState() guard.
         if (
-          job.status !== 'running' &&
-          aceStatus.status === 'running' &&
+          (aceStatus.status === 'running' || aceStatus.status === 'succeeded') &&
           !getCoverState(req.params.jobId)
         ) {
           const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
