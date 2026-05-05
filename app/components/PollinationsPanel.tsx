@@ -100,7 +100,10 @@ export const PollinationsPanel: React.FC = () => {
   };
 
   const clampInt = (raw: string, min: number, max: number, fallback: number): number => {
-    if (raw === '') return min;
+    // Empty input means user is mid-typing — keep the previous value instead
+    // of snapping to `min` (which would lock width/height to 256 the moment
+    // the user erases the field to retype a different number).
+    if (raw === '') return fallback;
     const n = parseInt(raw, 10);
     if (!Number.isFinite(n)) return fallback;
     return Math.max(min, Math.min(max, n));

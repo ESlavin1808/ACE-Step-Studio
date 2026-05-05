@@ -1010,6 +1010,14 @@ function AppContent() {
   // Handlers
   const handleGenerate = async (params: GenerationParams) => {
     if (!isAuthenticated || !token) {
+      // CreatePanel pre-allocated a placeholder card + bumped pendingClickCount
+      // before calling onGenerate. If we bail here without cleanup, the card
+      // sticks around as a ghost (no jobId, never promoted) and the N/10 badge
+      // stays inflated by 1 until reload.
+      if (params._tempId) {
+        setSongs(prev => prev.filter(s => s.id !== params._tempId));
+      }
+      decrementPendingClicks(1);
       setShowUsernameModal(true);
       return;
     }
