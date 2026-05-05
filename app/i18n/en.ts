@@ -132,6 +132,12 @@ export const en = {
     unableToPlay: 'Unable to play this song.',
     generationTimedOut: 'Generation timed out',
     writingLyricsAndStyle: 'Writing lyrics & style...',
+    // Per-stage labels shown on the in-flight song card (song.stage stores the key).
+    stageWaitingInQueue: 'Waiting in queue…',
+    stageGeneratingTextOpenRouter: 'Writing text via OpenRouter…',
+    stageStartingTrack: 'Starting track…',
+    stageGeneratingTrack: 'Generating track…',
+    stageGeneratingCover: 'Generating cover…',
     queued: 'Queued...',
     creating: 'Creating...',
     untitled: 'Untitled',
