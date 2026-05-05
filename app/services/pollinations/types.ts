@@ -29,6 +29,7 @@ export interface PollinationsConfig {
 
 export type PolErrorCode =
   | 'KEY_INVALID'
+  | 'PAYMENT_REQUIRED'
   | 'RATE_LIMITED'
   | 'MODEL_UNAVAILABLE'
   | 'PROMPT_REJECTED'

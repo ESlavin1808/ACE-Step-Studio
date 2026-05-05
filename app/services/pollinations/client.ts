@@ -26,6 +26,10 @@ function authHeaders(apiKey: string): Record<string, string> {
 
 function mapStatusToCode(status: number | null): PolErrorCode {
   if (status === 401 || status === 403) return 'KEY_INVALID';
+  // 402 = Pollinations tier-gating. Model requires Flower/Nectar (paid),
+  // user's token is Seed/Anonymous. UI surfaces this as a hint to switch
+  // to a Seed-tier model (flux, sana) or upgrade their token.
+  if (status === 402) return 'PAYMENT_REQUIRED';
   if (status === 429) return 'RATE_LIMITED';
   if (status === 404 || status === 503) return 'MODEL_UNAVAILABLE';
   if (status && status >= 400 && status < 500) return 'PROMPT_REJECTED';

@@ -187,6 +187,28 @@ export const CoverRegenModal: React.FC<Props> = ({ song, token, onClose, onCover
       if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
       const res = await fetch(url, { headers, signal: ac.signal });
       if (!res.ok) {
+        // 402 = Pollinations tier-gating: chosen model requires Flower/Nectar
+        // (paid), our token is Seed or Anonymous. Surface a concrete hint
+        // instead of the raw HTTP status — the user has no way to know that
+        // 402 means "switch model" otherwise.
+        if (res.status === 402) {
+          throw new Error(
+            t('coverRegen.errPaymentRequired') ||
+            `Model "${model}" requires a paid Pollinations tier. Try flux or sana, or upgrade your token at auth.pollinations.ai.`
+          );
+        }
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(
+            t('coverRegen.errKeyInvalid') ||
+            'Pollinations API key invalid or unauthorized for this model.'
+          );
+        }
+        if (res.status === 429) {
+          throw new Error(
+            t('coverRegen.errRateLimited') ||
+            'Rate limit hit. Wait a few seconds and try again.'
+          );
+        }
         throw new Error(`HTTP ${res.status} ${res.statusText}`);
       }
       const ct = (res.headers.get('content-type') || '').toLowerCase();

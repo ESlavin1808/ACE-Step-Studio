@@ -79,7 +79,17 @@ export async function generatePollinationsCover(input: PolGenInput): Promise<Pol
   try {
     const res = await fetch(url, { headers, signal: controller.signal, redirect: 'follow' });
     if (!res.ok) {
-      console.warn(`[pollinations] cover gen failed ${res.status} ${res.statusText}`);
+      // 402 = Pollinations tier-gating. The chosen model (`kontext`,
+      // `gptimage*`, `klein`, `wan-image`, `qwen-image`, …) requires
+      // Flower/Nectar (paid) tier; the user is on Seed or Anonymous.
+      // Auto-pipeline can't recover here — log a clear hint so the user
+      // knows to switch the auto-pipeline model in PollinationsPanel to
+      // a free-tier one (`flux`, `sana`).
+      if (res.status === 402) {
+        console.warn(`[pollinations] 402 PAYMENT_REQUIRED for model "${input.model}" — switch to a Seed-tier model (flux, sana) in PollinationsPanel, or upgrade your token at auth.pollinations.ai`);
+      } else {
+        console.warn(`[pollinations] cover gen failed ${res.status} ${res.statusText}`);
+      }
       return undefined;
     }
     const ct = (res.headers.get('content-type') || '').toLowerCase();
