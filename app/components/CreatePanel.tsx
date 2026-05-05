@@ -1539,6 +1539,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         if (waitForJobsToDrain) {
           try { await waitForJobsToDrain(); } catch { /* drain failures don't block our turn */ }
         }
+        // Promote the placeholder card(s) — we're now actively calling OR.
+        if (updateTempSongForClick) {
+          tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageGeneratingTextOpenRouter' }));
+        }
         try {
           const client = new OpenRouterProvider();
           const ac = new AbortController();

@@ -118,20 +118,21 @@ function AppContent() {
     const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const tempSong: Song = {
       id: tempId,
-      title: descriptionPreview.slice(0, 60) || 'Generating…',
+      title: descriptionPreview.slice(0, 60) || (t('generating') || 'Generating…'),
       lyrics: '',
       style: '',
       coverUrl: 'https://picsum.photos/200/200?blur=10',
       duration: '--:--',
       createdAt: new Date(),
       isGenerating: true,
-      stage: 'Queued…',
+      // Use the i18n key — SongList renders via t(song.stage) || song.stage.
+      stage: 'stageWaitingInQueue',
       tags: ['queued'],
       isPublic: true,
     };
     setSongs(prev => [tempSong, ...prev]);
     return tempId;
-  }, []);
+  }, [t]);
 
   // Update placeholder fields as LLM streams data, e.g. style/lyrics.
   const updateTempSongForClick = useCallback((tempId: string, patch: Partial<Song>) => {
@@ -998,7 +999,7 @@ function AppContent() {
         title: params.title || s.title,
         style: params.style || s.style,
         tags: params.customMode ? ['custom'] : ['simple'],
-        stage: t('startingTrack') || 'Starting track…',
+        stage: 'stageStartingTrack',
       } : s));
       setSelectedSong(prev => prev?.id === tempId ? { ...prev, title: params.title || prev.title, style: params.style || prev.style } : prev);
     } else {
