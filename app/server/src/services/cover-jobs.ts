@@ -17,32 +17,6 @@
 import { generatePollinationsCover, songIdToSeed } from './pollinations.js';
 import type { PollinationsCoverConfig } from './id3-tagger.js';
 
-/**
- * 16 art-style modifiers picked deterministically from the seed. Without
- * this, identical prompts (same caption, same instrumental flag) produce
- * essentially identical covers regardless of seed because Pollinations'
- * sampler is biased and the dataset overrepresents stock-rock-band-on-stage
- * imagery for "energetic pop rock" prompts.
- */
-const STYLE_MODIFIERS = [
-  'oil painting on canvas, painterly brush strokes',
-  'watercolor illustration, soft washes, paper texture',
-  'cinematic photography, anamorphic lens, dramatic chiaroscuro',
-  'digital matte painting, vibrant gradient sky',
-  'mixed-media collage, torn paper, ink splatters',
-  'graphic design poster, bold geometric shapes, flat colors',
-  'pencil sketch with charcoal shading, sketchbook texture',
-  'retro pop art, halftone dots, saturated comic palette',
-  'art deco poster, gold accents, symmetrical ornament',
-  'minimalist vector illustration, two-tone palette, lots of negative space',
-  'surrealist dreamscape, melting forms, impossible architecture',
-  'film noir black-and-white photograph, deep shadows, fog',
-  'retro 70s film grain, faded color palette, sun flare',
-  'hyperrealistic 3D render, octane, subsurface scattering',
-  'cyberpunk neon nightscape, holographic accents, rain reflections',
-  'isometric pixel art, limited 16-colour palette',
-];
-
 export interface CoverReady {
   state: 'ready';
   buffer: Buffer;
@@ -124,22 +98,13 @@ export function startCoverGen(
 
   const promise: Promise<CoverResult> = (async () => {
     try {
-      // Always derive a per-job seed even when seedMode='random' — we use it
-      // for the style-modifier index (we want one cover per job, not a
-      // cache hit on the previous song's prompt).
-      const seedForVariety = songIdToSeed(jobId);
-      const seed = pol.seedMode === 'song' ? seedForVariety : undefined;
-
-      // Pick a style modifier deterministically from the seed. This is the
-      // PRIMARY source of visual diversity across songs that share a caption
-      // (which is most of them, since the LLM tends to converge on similar
-      // phrasing for similar music).
-      const styleIdx = seedForVariety % STYLE_MODIFIERS.length;
-      const styleHint = STYLE_MODIFIERS[styleIdx];
-      const enrichedPrompt = `${pol.prompt}, ${styleHint}`;
+      // For seedMode='song' we derive a deterministic seed from the songId
+      // so a re-take produces the same cover; for 'random' we leave seed
+      // undefined and Pollinations rolls its own.
+      const seed = pol.seedMode === 'song' ? songIdToSeed(jobId) : undefined;
 
       const r = await generatePollinationsCover({
-        prompt: enrichedPrompt,
+        prompt: pol.prompt,
         model: pol.model,
         width: pol.width,
         height: pol.height,

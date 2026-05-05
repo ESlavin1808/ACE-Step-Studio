@@ -4,11 +4,14 @@
 
 ### Added
 - **OpenRouter LLM provider** — bring-your-own-key alternative to the local LM. Pick any model (Claude, GPT-4o, DeepSeek, Llama 3.x, 200+ supported, **including many free ones — DeepSeek R1 free, Llama 3.3 free, Gemini 2.0 free etc.**), get instant lyrics + caption + BPM/key/duration metadata + a visual `coverPrompt` from a one-line description. Persists model choice across sessions, streams output with a real-time preview. Local LM keeps working in parallel — toggle anytime, both modes coexist.
-- **Pollinations.ai auto cover generation** — server-side, parallel with audio render, fire-and-forget. Never blocks the audio pipeline; cover_url is filled via background UPDATE 5–30 s after audio completes. 16 art-style modifiers picked deterministically by seed for visual diversity across songs sharing a caption. **Anonymous tier is fully free** (no account needed, just slower); optional tokens (`pk_…` / `sk_…` from auth.pollinations.ai) lift to Seed tier (1 req/5 s, no watermark, full model catalogue).
+- **Pollinations.ai auto cover generation** — server-side, parallel with audio render, fire-and-forget. Never blocks the audio pipeline; cover_url is filled via background UPDATE 5–30 s after audio completes. The visual prompt is the LLM-generated `coverPrompt` (or a keyword fallback) — sent to Pollinations as-is, no extra style modifiers. **Anonymous tier is fully free** (no account needed, just slower); optional tokens (`pk_…` / `sk_…` from auth.pollinations.ai) lift to Seed tier (1 req/5 s, no watermark, full model catalogue).
 - **Manual cover regeneration modal** — `ImagePlus` button on every owned song row in SongList and in the RightSidebar Main Actions. Lets the user pick any Pollinations image model, write a custom prompt, *Try again* until satisfied, **or upload a custom image from disk** (JPEG/PNG/WEBP, max 10 MB). The picked image replaces both `songs.cover_url` AND the embedded ID3 cover frame inside the MP3, so any external player sees the new picture in downloads.
-- **LLM `coverPrompt` field** in SongDraft schema — the OpenRouter system prompt now also asks for a 1–2 sentence visual album-cover description per song, fed straight into Pollinations along with one of 16 art-style modifiers.
+- **Auto-pipeline ID3 re-embed** — when Pollinations finishes the auto cover, `attachCover` now also reads the source MP3, replaces the embedded ID3 image frame with the new picture, and writes it back. Previously the downloaded MP3 kept the seeded picsum thumbnail forever even though the in-app cover was correct.
+- **LLM `coverPrompt` field** in SongDraft schema — the OpenRouter system prompt now also asks for a 1–2 sentence visual album-cover description per song, fed straight into Pollinations as the cover prompt.
+- **Detailed pre-flight stages** — the OpenRouter pre-flight call now reports `stageOpenRouterConnecting → stageOpenRouterStreaming → stageOpenRouterFinalizing` driven by stream events, so a stuck card tells you whether the issue is on connect, in mid-stream or in JSON parsing.
+- **Cancel + 90 s timeout for OpenRouter pre-flight** — the cancel button on the placeholder card now actually aborts the in-flight OR HTTP request (was previously inert). Cancel-all and Reset-all also abort every pending pre-flight aborter so OR responses can't 'win the race' and spawn audio jobs after the user cancelled. A hard 90-second timeout kills hung requests automatically.
 - **Queue refactor** — instant N/10 click counter, instant placeholder card at click time (no more 20-second wait staring at an empty list while LLM pre-flight runs), FIFO drain barrier so bulk clicks chain through pre-flight + audio sequentially.
-- **i18n** — 49 new keys × 5 languages (en/ru/zh/ja/ko) for stage labels, Pollinations panel, OpenRouter panel, cover-regen modal.
+- **i18n** — 52 new keys × 5 languages (en/ru/zh/ja/ko) for stage labels (incl. 3 OR sub-stages), Pollinations panel, OpenRouter panel, cover-regen modal.
 
 ### Fixed
 - **`resetGeneration` queue deadlock** — the global Reset-all button cleared `activeJobsRef` but never called `drainQueueWaiters()` or reset `pendingClickCount`, so any pre-flight click parked on `waitForJobsToDrain` would hang forever and the badge stayed stuck.
@@ -21,7 +24,9 @@
 
 ### Changed
 - **CSP `connectSrc`** allows `gen.pollinations.ai`, `image.pollinations.ai`, `openrouter.ai`. Browser-direct fetches to OpenRouter and Pollinations work without a server proxy.
+- **CSP `imgSrc`** now allows `blob:` so the cover-regen modal preview can render `URL.createObjectURL(blob)` images.
 - **Storage abstraction** gained an optional `read(key)` method (Local implements; remote providers like S3 may omit so callers fall back to skipping retag instead of paying a download).
+- **Removed the 16 deterministic art-style modifiers** from `cover-jobs.ts` — the LLM-generated `coverPrompt` is already a tailored visual description, appending another fixed style label was clobbering it. The prompt now goes to Pollinations as-is.
 
 ## 2026-05-04
 

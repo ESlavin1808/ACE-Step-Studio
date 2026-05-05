@@ -41,7 +41,7 @@ Built on [ACE-Step 1.5 XL](https://github.com/ace-step/ACE-Step-1.5) — the ope
 
 ### Cloud LLM & Image (optional, off by default)
 - **OpenRouter for lyrics & style** — bring-your-own-key alternative to the local LM. Pick any model (Claude, GPT-4o, DeepSeek, Llama 3.x, etc.), get instant lyrics + caption + key/BPM/duration metadata without using GPU VRAM. Local LM keeps working in parallel — toggle anytime.
-- **Pollinations.ai cover generation** — auto-generate album covers in parallel with audio (server-side, fire-and-forget, never blocks audio gen). 16 art-style modifiers picked deterministically by seed for visual diversity. Anonymous tier works; bring your own token for higher rate limits and no watermark.
+- **Pollinations.ai cover generation** — auto-generate album covers in parallel with audio (server-side, fire-and-forget, never blocks audio gen). The visual prompt comes straight from the OpenRouter LLM (which writes a 1–2 sentence visual description tailored to the song's lyrics and mood) or from a keyword fallback. Anonymous tier works; bring your own token for higher rate limits and no watermark.
 - **Manual cover regen modal** — picture-with-pencil button on every track. Pick any Pollinations model, write your own prompt, "Try again" until you like it, **or upload your own image from disk** (JPEG/PNG/WEBP, ≤10MB). Saved cover replaces both `songs.cover_url` and the embedded ID3 frame inside the MP3, so external players see your picked image too.
 - **Independent toggles** — every cloud feature is opt-in. Use only Pollinations covers + local LM, or only OpenRouter lyrics + auto-picsum covers, or both, or neither. Local-only mode is the default.
 
