@@ -133,6 +133,8 @@ interface GenerateBody {
 
   // Simple Mode
   songDescription?: string;
+  /** ACE-Step text prompt — alias of lyrics for custom mode. */
+  prompt?: string;
 
   // Custom Mode
   lyrics: string;
@@ -316,6 +318,9 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
     const {
       customMode,
       songDescription,
+      // `prompt` is the ACE-Step text prompt — frontend sends it for custom mode
+      // (alias of lyrics). Was being silently dropped before.
+      prompt,
       lyrics,
       style,
       title,
@@ -420,6 +425,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
     const params = {
       customMode,
       songDescription,
+      prompt,
       lyrics,
       style,
       title,

@@ -1006,7 +1006,7 @@ function AppContent() {
     // createTempSongForClick (so the user sees something AT click time, not
     // after the 20s LLM pre-flight), reuse that card. Otherwise create one
     // here as before.
-    const preCreatedId = (params as any)._tempId as string | undefined;
+    const preCreatedId = params._tempId;
     const tempId = preCreatedId || `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     if (preCreatedId) {
       // Promote the placeholder with whatever metadata the pre-flight produced.
@@ -1151,33 +1151,31 @@ function AppContent() {
         repaintMode: params.repaintMode,
         repaintStrength: params.repaintStrength,
         ditModel: params.ditModel,
-        // Fields the CreatePanel customPayload IIFE builds but the legacy
-        // whitelist was dropping silently — DCW + FlowEdit clusters, retake
-        // controls, lora flag, prompt alias. Recovered via review (agent10
-        // §2). Cast through `any` because the shared GenerationParams
-        // interfaces drift (App-level vs api.ts vs server) — see review.
-        prompt: (params as any).prompt,
-        dcwEnabled: (params as any).dcwEnabled,
-        dcwMode: (params as any).dcwMode,
-        dcwScaler: (params as any).dcwScaler,
-        dcwHighScaler: (params as any).dcwHighScaler,
-        dcwWavelet: (params as any).dcwWavelet,
-        retakeSeed: (params as any).retakeSeed,
-        retakeVariance: (params as any).retakeVariance,
-        flowEditMorph: (params as any).flowEditMorph,
-        flowEditSourceCaption: (params as any).flowEditSourceCaption,
-        flowEditSourceLyrics: (params as any).flowEditSourceLyrics,
-        flowEditNMin: (params as any).flowEditNMin,
-        flowEditNMax: (params as any).flowEditNMax,
-        flowEditNAvg: (params as any).flowEditNAvg,
-        loraLoaded: (params as any).loraLoaded,
+        // Fields the CreatePanel customPayload IIFE builds — must be mirrored
+        // explicitly here because `generateApi.startGeneration` whitelists the
+        // payload and any field not listed is silently dropped.
+        prompt: params.prompt,
+        dcwEnabled: params.dcwEnabled,
+        dcwMode: params.dcwMode,
+        dcwScaler: params.dcwScaler,
+        dcwHighScaler: params.dcwHighScaler,
+        dcwWavelet: params.dcwWavelet,
+        retakeSeed: params.retakeSeed,
+        retakeVariance: params.retakeVariance,
+        flowEditMorph: params.flowEditMorph,
+        flowEditSourceCaption: params.flowEditSourceCaption,
+        flowEditSourceLyrics: params.flowEditSourceLyrics,
+        flowEditNMin: params.flowEditNMin,
+        flowEditNMax: params.flowEditNMax,
+        flowEditNAvg: params.flowEditNAvg,
+        loraLoaded: params.loraLoaded,
         // OpenRouter — model id used for the AI lyric/caption run (persisted on song row).
-        openrouterModel: (params as any).openrouterModel,
+        openrouterModel: params.openrouterModel,
         // Pollinations.ai cover-gen config — opaque blob mirrored to backend.
-        pollinations: (params as any).pollinations,
+        pollinations: params.pollinations,
         // Pre-created placeholder card id (instant feedback at click time).
-        _tempId: (params as any)._tempId,
-      } as any, token);
+        _tempId: params._tempId,
+      }, token);
 
       // Store jobId on the temp song so cancel button works
       setSongs(prev => prev.map(s => s.id === tempId ? { ...s, jobId: job.jobId } : s));

@@ -177,6 +177,35 @@ describe('cover-jobs state machine', () => {
     expect(call?.seed).toBeUndefined();
   });
 
+  it('consumeCoverState tombstones the jobId so a still-running gen does not resurrect the entry', async () => {
+    let resolveFn!: (v: any) => void;
+    mockGenerate.mockImplementation(() => new Promise((r) => { resolveFn = r; }));
+
+    const e = startCoverGen('zombie', baseCfg);
+    expect(e.state).toBe('pending');
+    expect(getCoverState('zombie')?.state).toBe('pending');
+
+    // User cancels mid-flight
+    consumeCoverState('zombie');
+    expect(getCoverState('zombie')).toBeUndefined();
+
+    // Now the in-flight Pollinations call returns
+    resolveFn({ buffer: fakeJpegBytes, mimeType: 'image/jpeg' });
+    if (e.state === 'pending') await e.promise;
+
+    // Entry should NOT be resurrected
+    expect(getCoverState('zombie')).toBeUndefined();
+  });
+
+  it('startCoverGen on a tombstoned jobId returns failed without firing the network call', async () => {
+    consumeCoverState('tombstoned'); // tombstone w/o ever starting
+    mockGenerate.mockReset();
+
+    const e = startCoverGen('tombstoned', baseCfg);
+    expect(e.state).toBe('failed');
+    expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
   it('derives seed from jobId when seedMode is song', async () => {
     mockGenerate.mockResolvedValue({ buffer: fakeJpegBytes, mimeType: 'image/jpeg' });
     const e = startCoverGen('song-seed', baseCfg);

@@ -65,9 +65,19 @@ export type CoverEntry = CoverPending | CoverResult;
 
 const jobs = new Map<string, CoverEntry>();
 
+// Tombstone set: jobIds that were consumed mid-flight. The in-flight
+// Promise inside startCoverGen() checks this before its final jobs.set()
+// to prevent zombie resurrection (R3-1 / R3 agent07 M7 / R2 agent01 NIT).
+// Without this, consumeCoverState's jobs.delete() is undone seconds later
+// when Pollinations finally responds → ~300KB Buffer leak per cancel/fail
+// that accumulates unbounded over weeks.
+const cancelled = new Set<string>();
+const TOMBSTONE_TTL_MS = 5 * 60_000; // forget after 5 min — long enough to outlive any in-flight Pollinations call
+
 /** Reset for tests. */
 export function _resetCoverJobs(): void {
   jobs.clear();
+  cancelled.clear();
 }
 
 /** Inspect current state for a jobId without consuming it. */
@@ -75,10 +85,18 @@ export function getCoverState(jobId: string): CoverEntry | undefined {
   return jobs.get(jobId);
 }
 
-/** Drop the entry once consumer has handled it. */
+/**
+ * Drop the entry once consumer has handled it. Also tombstones the jobId so
+ * any still-running Promise inside startCoverGen won't resurrect the entry
+ * via its terminal `jobs.set(jobId, …)`.
+ */
 export function consumeCoverState(jobId: string): CoverEntry | undefined {
   const e = jobs.get(jobId);
   jobs.delete(jobId);
+  cancelled.add(jobId);
+  // Auto-evict the tombstone after the Pollinations call could not possibly
+  // still be running (60s timeout + slack).
+  setTimeout(() => cancelled.delete(jobId), TOMBSTONE_TTL_MS).unref?.();
   return e;
 }
 
@@ -95,6 +113,12 @@ export function startCoverGen(
 ): CoverEntry {
   const existing = jobs.get(jobId);
   if (existing) return existing;
+  // If this jobId was tombstoned (cancelled/failed), do NOT start a new gen
+  // — the only callers are the status-poll guards which would otherwise
+  // re-fire on every poll for a cancelled job.
+  if (cancelled.has(jobId)) {
+    return { state: 'failed', reason: 'cancelled', finishedAt: Date.now() };
+  }
 
   const startedAt = Date.now();
 
@@ -131,7 +155,8 @@ export function startCoverGen(
           reason: 'pollinations returned undefined (timeout/error)',
           finishedAt: Date.now(),
         };
-        jobs.set(jobId, result);
+        // Don't resurrect a consumed entry (job was cancelled / failed).
+        if (!cancelled.has(jobId)) jobs.set(jobId, result);
         return result;
       }
       const result: CoverReady = {
@@ -140,7 +165,7 @@ export function startCoverGen(
         mimeType: r.mimeType,
         finishedAt: Date.now(),
       };
-      jobs.set(jobId, result);
+      if (!cancelled.has(jobId)) jobs.set(jobId, result);
       return result;
     } catch (e: any) {
       const result: CoverFailed = {
@@ -148,7 +173,7 @@ export function startCoverGen(
         reason: String(e?.message || e),
         finishedAt: Date.now(),
       };
-      jobs.set(jobId, result);
+      if (!cancelled.has(jobId)) jobs.set(jobId, result);
       return result;
     }
   })();
