@@ -217,7 +217,11 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   // OpenRouter (LLM provider) integration
   const [useOpenRouter, setUseOpenRouter] = useState<boolean>(() => {
     const stored = llmStorage.getUseOpenRouter();
-    return stored ?? false;
+    // Default ON when never set: in `run-no-lm.bat` the local LM is unavailable
+    // so the AI buttons must route through OpenRouter to do anything at all.
+    // Users on `run.bat` who want the local LM can flip the toggle off in one
+    // click; the choice is then persisted.
+    return stored ?? true;
   });
   const [lastOpenRouterModelId, setLastOpenRouterModelId] = useState<string | null>(null);
 

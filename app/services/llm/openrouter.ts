@@ -112,19 +112,23 @@ export async function getModelList(apiKey: string): Promise<any[]> {
   return listModels(makeClient(apiKey), apiKey, false);
 }
 
-export async function testApiKey(apiKey: string, model = 'openrouter/auto'): Promise<{ ok: true }> {
-  const client = makeClient(apiKey);
-  try {
-    const res = await (client.chat as any).send({
-      model,
-      messages: [{ role: 'user', content: 'hi' }],
-      maxTokens: 1,
-    });
-    void res;
-    return { ok: true };
-  } catch (e) {
-    throw new OpenRouterError(mapErrorToCode(e), `key test failed: ${(e as any)?.message || e}`);
+export async function testApiKey(apiKey: string, model?: string): Promise<{ ok: true }> {
+  // Use the cheapest, most-broadly-supported test: GET /models with the key.
+  // It's a single round-trip, doesn't bill any completion tokens, and works
+  // for every model on the platform (avoids picking a specific model that
+  // might not be live for this user).
+  const r = await fetch('https://openrouter.ai/api/v1/models', {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'HTTP-Referer': PROJECT_HEADERS.httpReferer,
+      'X-Title': PROJECT_HEADERS.appTitle,
+    },
+  });
+  if (!r.ok) {
+    throw new OpenRouterError(mapErrorToCode({ status: r.status }), `key test failed: ${r.status}`);
   }
+  void model; // intentional: keep param for backwards compat
+  return { ok: true };
 }
 
 // Strip markdown ```json ... ``` fences some models add even when asked for JSON.
