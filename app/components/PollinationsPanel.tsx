@@ -42,8 +42,11 @@ export const PollinationsPanel: React.FC = () => {
   };
   // Pollinations /models works without a key (anonymous tier), so we trigger
   // the load on mount and whenever the key changes (new key may unlock more).
+  // Debounced 400ms so a typed key doesn't fire one /models per keystroke
+  // (anonymous tier is rate-limited 1 req/15s — burst typing → 429 → empty list).
   useEffect(() => {
-    reloadModels(false);
+    const id = setTimeout(() => reloadModels(false), 400);
+    return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfg.apiKey]);
 

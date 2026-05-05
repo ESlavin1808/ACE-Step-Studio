@@ -1570,6 +1570,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
       try {
         perClickDraft = await llmPreflightQueueRef.current;
         if (!perClickDraft) { releaseClaimedSlots(); return; }
+        // Stamp the model id used for this song — `orHook` only updates this
+        // for the explicit AI buttons, not the Простой-mode pre-flight, so
+        // without this `params.openrouterModel` would always be null for
+        // Простой+OR generations and the song-row badge tooltip would be empty.
+        const orModelId = llmStorage.getOpenRouter().model;
+        if (orModelId) setLastOpenRouterModelId(orModelId);
       } catch (e) {
         console.error('[Simple+OR] queued pre-flight failed:', e);
         releaseClaimedSlots();

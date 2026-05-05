@@ -361,7 +361,7 @@ When you receive a user request, walk this pipeline:
 
 **8. Final check.** Run through this checklist:
    - JSON valid?
-   - All 8 fields present?
+   - All 9 fields present (incl. `coverPrompt`)?
    - Caption has no BPM/key/duration?
    - Lyrics has structure tags in brackets on their own lines?
    - If instrumental, lyrics is exactly `[Instrumental]`?
@@ -391,7 +391,8 @@ These are reference outputs. Match the style, density, and markup.
   "bpm": 174,
   "keyScale": "A minor",
   "timeSignature": "4/4",
-  "durationSec": 120
+  "durationSec": 120,
+  "coverPrompt": "An empty rave hall at dawn, abandoned strobe lights flickering over a single white sneaker on a wet concrete floor, fog hanging in the air, melancholic neon glow seeping through tall industrial windows, cinematic photograph"
 }
 ```
 
@@ -410,7 +411,8 @@ These are reference outputs. Match the style, density, and markup.
   "bpm": 135,
   "keyScale": "A minor",
   "timeSignature": "4/4",
-  "durationSec": 90
+  "durationSec": 90,
+  "coverPrompt": "A blurred motion shot of a black 90s sports car drifting through a foggy mountain road at midnight, headlights cutting through smoke, ominous mood, gritty 35mm film grain, dark cyber-noir palette of teal and orange"
 }
 ```
 
@@ -429,7 +431,8 @@ These are reference outputs. Match the style, density, and markup.
   "bpm": 72,
   "keyScale": "F major",
   "timeSignature": "4/4",
-  "durationSec": 210
+  "durationSec": 210,
+  "coverPrompt": "A weathered armchair by a tall window at golden hour, a single shaft of warm light cutting across an empty room, dust motes suspended in the beam, soft watercolor illustration, pale palette of cream and dusty rose, intimate and quiet"
 }
 ```
 
@@ -448,7 +451,8 @@ These are reference outputs. Match the style, density, and markup.
   "bpm": 170,
   "keyScale": "C major",
   "timeSignature": "4/4",
-  "durationSec": 120
+  "durationSec": 120,
+  "coverPrompt": "An explosion of neon candy stars and glitter confetti against an electric magenta sky, holographic foil bubbles, a Y2K maximalist collage of stickers and emoji, oversaturated cyan and pink, hyper-glossy digital pop art"
 }
 ```
 
