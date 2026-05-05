@@ -84,6 +84,24 @@ function AppContent() {
   const activeJobsRef = useRef<Map<string, { tempId: string; pollInterval: ReturnType<typeof setInterval> }>>(new Map());
   const [activeJobCount, setActiveJobCount] = useState(0);
 
+  // FIFO drain barrier — handlers awaiting it block until the active-jobs
+  // queue is empty. Used by CreatePanel to chain LLM pre-flight calls behind
+  // the previous track's full completion (LLM + audio + cover) — that's the
+  // user's "queue" mental model: gen N+1 starts only after gen N is done.
+  const queueDrainResolversRef = useRef<Array<() => void>>([]);
+  const waitForJobsToDrain = useCallback((): Promise<void> => {
+    if (activeJobsRef.current.size === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      queueDrainResolversRef.current.push(resolve);
+    });
+  }, []);
+  const drainQueueWaiters = useCallback(() => {
+    if (activeJobsRef.current.size !== 0) return;
+    const waiters = queueDrainResolversRef.current;
+    queueDrainResolversRef.current = [];
+    waiters.forEach((r) => r());
+  }, []);
+
   // Theme State
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     const stored = localStorage.getItem('theme');
@@ -353,7 +371,9 @@ function AppContent() {
           title: s.title,
           lyrics: s.lyrics,
           style: s.style,
-          coverUrl: `https://picsum.photos/seed/${s.id}/400/400`,
+          // Prefer the real cover saved by the audio-gen pipeline (Pollinations).
+          // Fallback to a seeded picsum for legacy songs without cover_url.
+          coverUrl: s.cover_url || s.coverUrl || `https://picsum.photos/seed/${s.id}/400/400`,
           duration: s.duration && s.duration > 0 ? `${Math.floor(s.duration / 60)}:${String(Math.floor(s.duration % 60)).padStart(2, '0')}` : '0:00',
           createdAt: new Date(s.created_at || s.createdAt),
           tags: s.tags || [],
@@ -696,6 +716,7 @@ function AppContent() {
     if (activeJobsRef.current.size === 0) {
       setIsGenerating(false);
     }
+    drainQueueWaiters();
   }, []);
 
   // Cancel a single generation job (soft — stops polling, keeps card visible)
@@ -794,7 +815,8 @@ function AppContent() {
         title: s.title,
         lyrics: s.lyrics,
         style: s.style,
-        coverUrl: `https://picsum.photos/seed/${s.id}/400/400`,
+        // Prefer real cover saved by Pollinations integration.
+        coverUrl: (s as any).cover_url || (s as any).coverUrl || `https://picsum.photos/seed/${s.id}/400/400`,
         duration: s.duration && s.duration > 0 ? `${Math.floor(s.duration / 60)}:${String(Math.floor(s.duration % 60)).padStart(2, '0')}` : '0:00',
         createdAt: new Date(s.created_at),
         tags: s.tags || [],
@@ -1051,6 +1073,10 @@ function AppContent() {
         repaintMode: params.repaintMode,
         repaintStrength: params.repaintStrength,
         ditModel: params.ditModel,
+        // OpenRouter — model id used for the AI lyric/caption run (persisted on song row).
+        openrouterModel: (params as any).openrouterModel,
+        // Pollinations.ai cover-gen config — opaque blob mirrored to backend.
+        pollinations: (params as any).pollinations,
       }, token);
 
       // Store jobId on the temp song so cancel button works
@@ -1530,6 +1556,7 @@ function AppContent() {
                 createdSongs={songs}
                 pendingAudioSelection={pendingAudioSelection}
                 onAudioSelectionApplied={() => setPendingAudioSelection(null)}
+                waitForJobsToDrain={waitForJobsToDrain}
               />
             </div>
             {leftPanel.handle}

@@ -13,6 +13,7 @@ import { GenerationStatusPanel } from './GenerationStatusPanel';
 import { UsePollinationsToggle } from './UsePollinationsToggle';
 import { PollinationsPanel } from './PollinationsPanel';
 import { useOpenRouterGeneration } from '../services/llm/useOpenRouterGeneration';
+import { OpenRouterProvider } from '../services/llm/openrouter';
 import { llmStorage } from '../services/llm/storage';
 import type { SongDraft } from '../services/llm/types';
 import { pollinationsStorage } from '../services/pollinations/storage';
@@ -37,6 +38,11 @@ interface CreatePanelProps {
   createdSongs?: Song[];
   pendingAudioSelection?: { target: 'reference' | 'source'; url: string; title?: string } | null;
   onAudioSelectionApplied?: () => void;
+  /** Returns a promise that resolves when all currently-running generation
+   *  jobs have completed. Used to serialize bulk clicks: the next click's
+   *  LLM pre-flight + POST happen only after the previous track is fully
+   *  done (audio + cover). Resolves immediately when no jobs are active. */
+  waitForJobsToDrain?: () => Promise<void>;
 }
 
 const KEY_SIGNATURES = [
@@ -129,6 +135,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   createdSongs = [],
   pendingAudioSelection,
   onAudioSelectionApplied,
+  waitForJobsToDrain,
 }) => {
   const { isAuthenticated, token, user } = useAuth();
   const { t } = useI18n();
@@ -234,6 +241,13 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     return pollinationsStorage.getUsePollinations() ?? false;
   });
   useEffect(() => { pollinationsStorage.setUsePollinations(usePollinations); }, [usePollinations]);
+
+  // FIFO queue for OR pre-flight LLM calls — bulk clicks chain through this
+  // ref so the LLM hits one request at a time AND each click waits for the
+  // previous track's full completion (audio + cover) before its own LLM
+  // starts. The shared `orHook` singleton is reserved for explicit AI-buttons
+  // (Generate/Format) whose streaming UI demands a single source of truth.
+  const llmPreflightQueueRef = useRef<Promise<SongDraft | null>>(Promise.resolve(null));
 
   // LM Parameters (under Expert)
   const [showLmParams, setShowLmParams] = useState(false);
@@ -1455,39 +1469,54 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     }
   };
 
+  // Per-click LLM draft from pre-flight (used to populate effStyle/effLyrics/etc
+  // and the Pollinations cover prompt). null = pre-flight either didn't run
+  // (custom mode or local LM available) or failed (we'd have early-returned).
+  let perClickDraft: SongDraft | null = null;
+
   const handleGenerate = async () => {
     // Simple mode + OpenRouter ON + no local LM = pre-flight: ask OR to expand
     // the user's description into caption/lyrics/metadata, fill the same fields
-    // a Custom-mode submission would have, then proceed as Custom. The Python
-    // pipeline's sample_mode wants a local 5Hz LM that doesn't exist in
-    // run-no-lm.bat; without this pre-flight the audio gen would either error
-    // or get blank inputs.
+    // a Custom-mode submission would have, then proceed as Custom.
+    //
+    // SEQUENTIAL queue: bulk clicks chain through llmPreflightQueueRef. Each
+    // click also waits for waitForJobsToDrain() — the previous track's full
+    // pipeline (LLM + audio + cover) must be done before the next click's LLM
+    // even starts. This matches the user's "queue" mental model.
+    //
+    // CRITICAL: this MUST NOT use the shared `orHook` singleton — that hook is
+    // single-flight and would conflict with explicit AI-Generate buttons.
+    // We spawn a fresh OpenRouterProvider per click instead.
     if (!customMode && useOpenRouter && !activeLmModel) {
       if (!songDescription.trim()) return;
+      llmPreflightQueueRef.current = llmPreflightQueueRef.current.then(async () => {
+        if (waitForJobsToDrain) {
+          try { await waitForJobsToDrain(); } catch { /* drain failures don't block our turn */ }
+        }
+        try {
+          const client = new OpenRouterProvider();
+          const ac = new AbortController();
+          return await client.generate(
+            {
+              topic: songDescription,
+              primary: 'lyrics',
+              language: vocalLanguage || 'en',
+              instrumental,
+              durationSec: duration > 0 ? duration : undefined,
+              thinking,
+            },
+            { signal: ac.signal, onEvent: () => {} },
+          );
+        } catch (e) {
+          console.error('[Simple+OR] pre-flight failed:', e);
+          return null;
+        }
+      });
       try {
-        await new Promise<void>((resolve, reject) => {
-          let resolved = false;
-          const wrappedHook = orHook;
-          // We use the same hook; its onPartial fills style/lyrics/etc as it
-          // streams (per the existing onPartial wiring above).
-          // Listen for terminal state via a subscription pattern:
-          const cleanup = setInterval(() => {
-            const k = wrappedHook.state.kind;
-            if (k === 'success') { clearInterval(cleanup); if (!resolved) { resolved = true; resolve(); } }
-            else if (k === 'error' || k === 'cancelled') { clearInterval(cleanup); if (!resolved) { resolved = true; reject(new Error('OpenRouter pre-flight failed: ' + k)); } }
-          }, 250);
-          // Fire generate. activePrimary='lyrics' so onPartial fills both lyrics and aux fields.
-          orHook.runGenerate({
-            topic: songDescription,
-            primary: 'lyrics',
-            language: vocalLanguage || 'en',
-            instrumental,
-            durationSec: duration > 0 ? duration : undefined,
-            thinking,
-          });
-        });
+        perClickDraft = await llmPreflightQueueRef.current;
+        if (!perClickDraft) return;
       } catch (e) {
-        console.error('[Simple+OR] pre-flight failed:', e);
+        console.error('[Simple+OR] queued pre-flight failed:', e);
         return;
       }
     }
@@ -1495,17 +1524,20 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     // After pre-flight we ALWAYS submit in customMode shape so the backend
     // doesn't try to re-expand the description through a non-existent LM.
     const effectiveCustomMode = customMode || (useOpenRouter && !activeLmModel);
-    // Read the freshest values via refs — after the OR pre-flight `await`
-    // above, the React closure variables (style, lyrics, bpm, …) are still
-    // the snapshot from the click moment, but the streaming has filled the
-    // refs synchronously through onPartial / setBpm / setKeyScale / etc.
-    const effStyle = effectiveCustomMode && styleRef.current ? styleRef.current : style;
-    const effLyrics = effectiveCustomMode && lyricsTextRef.current ? lyricsTextRef.current : lyrics;
-    const effTitle = effectiveCustomMode && titleRef.current ? titleRef.current : title;
-    const effBpm = effectiveCustomMode && bpmRef.current > 0 ? bpmRef.current : bpm;
-    const effKeyScale = effectiveCustomMode && keyScaleRef.current ? keyScaleRef.current : keyScale;
-    const effTimeSig = effectiveCustomMode && timeSignatureRef.current ? timeSignatureRef.current : timeSignature;
-    const effDuration = effectiveCustomMode && durationRef.current > 0 ? durationRef.current : duration;
+    // Prefer this-click's per-click draft (set by the OR pre-flight above).
+    // Fallback to refs (which reflect the LAST successful streamed gen).
+    // Final fallback to the React state values shown in the form.
+    const d = perClickDraft;
+    const effStyle = effectiveCustomMode && (d?.caption || styleRef.current) ? (d?.caption || styleRef.current) : style;
+    const effLyrics = effectiveCustomMode && (d?.lyrics || lyricsTextRef.current) ? (d?.lyrics || lyricsTextRef.current) : lyrics;
+    const effTitle = effectiveCustomMode && (d?.title || titleRef.current) ? (d?.title || titleRef.current) : title;
+    const effBpm = effectiveCustomMode && (d?.bpm || bpmRef.current) > 0 ? (d?.bpm || bpmRef.current) : bpm;
+    const effKeyScale = effectiveCustomMode && (d?.keyScale || keyScaleRef.current) ? (d?.keyScale || keyScaleRef.current) : keyScale;
+    const effTimeSig = effectiveCustomMode && (d?.timeSignature || timeSignatureRef.current) ? (d?.timeSignature || timeSignatureRef.current) : timeSignature;
+    const effDuration = effectiveCustomMode && (d?.durationSec || durationRef.current) > 0 ? (d?.durationSec || durationRef.current) : duration;
+    // LLM-tailored cover prompt for this exact song. Empty string falls
+    // through to the keyword-based default in buildCoverPrompt.
+    const effCoverPrompt = d?.coverPrompt || '';
 
     const styleWithGender = (() => {
       if (!vocalGender) return effStyle;
@@ -1561,7 +1593,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
             enhance: polCfg.enhance,
             nologo: polCfg.nologo,
             safe: polCfg.safe,
-            prompt: buildCoverPrompt({
+            // Prefer the LLM-tailored cover prompt (visual sentences derived
+            // from the lyrics) when available; fall back to a keyword-based
+            // prompt assembled from caption/topic.
+            prompt: effCoverPrompt || buildCoverPrompt({
               title: effTitle,
               caption: styleWithGender,
               topic: songDescription,
@@ -3071,6 +3106,18 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                 t('applyLmSettings') || 'Apply LM Settings (restart pipeline)'
               )}
             </button>}
+
+            {/* ───── Pollinations.ai cover generation ─────
+                Independent of the LLM provider above. When ON, after audio
+                renders, the server hits Pollinations to generate an album
+                cover and persists it to song.cover_url. */}
+            <div className="border-t border-zinc-200 dark:border-white/5 pt-2 mt-2">
+              <div className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-500 mb-1">
+                {t('pollinations.sectionTitle') || 'Cover image (Pollinations.ai)'}
+              </div>
+              <UsePollinationsToggle value={usePollinations} onChange={setUsePollinations} />
+              {usePollinations && <PollinationsPanel />}
+            </div>
 
             {/* Seed */}
             <div className="space-y-2">
