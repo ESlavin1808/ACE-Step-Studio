@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { X, Loader2, Sparkles, Save, RefreshCw, Upload } from 'lucide-react';
+import { X, Loader2, Sparkles, Save, RefreshCw, Upload, Search } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
 import { pollinationsStorage } from '../services/pollinations/storage';
 import { getPollinationsModels } from '../services/pollinations/client';
@@ -10,17 +10,21 @@ import type { Song } from '../types';
 /**
  * Manual cover regeneration modal.
  *
- * Minimal UI: model dropdown + prompt textarea + Generate button + preview
- * with history + Save/Try-again. All other Pollinations knobs (width/height,
- * seed mode, enhance/nologo/safe, API key) come from the persisted
- * pollinationsStorage.getConfig() — the user already configured those in the
- * main PollinationsPanel (auto-pipeline). This modal is just a quick way to
- * iterate on a single cover for an already-generated track.
+ * Layout follows the convention used by image-generation tools (Civitai,
+ * Krea, Midjourney web): controls on the LEFT (model + prompt + actions),
+ * a large square preview + history strip on the RIGHT. On narrow screens
+ * the two columns stack vertically.
  *
- * On Save, blob is uploaded to /api/songs/:id/regen-cover which writes the
- * file under the same `${userId}/covers/${songId}.{ext}` path that the
- * auto-pipeline uses, so playback / downloads / sidebar all see the new cover
- * without any extra plumbing.
+ * Pollinations knobs that are NOT in this modal (width/height, seed mode,
+ * enhance/nologo/safe, API key) come from the persisted
+ * pollinationsStorage.getConfig() — the user already configured those in
+ * the main PollinationsPanel (auto-pipeline). This modal is just a quick
+ * way to iterate on a single cover for an already-generated track.
+ *
+ * On Save the picked blob is uploaded to /api/songs/:id/regen-cover which
+ * writes the file under the same `${userId}/covers/${songId}.{ext}` path
+ * the auto-pipeline uses, so playback / downloads / sidebar all see the
+ * new cover with no extra plumbing.
  */
 interface Props {
   song: Song;
@@ -64,6 +68,13 @@ export const CoverRegenModal: React.FC<Props> = ({ song, token, onClose, onCover
   const [model, setModel] = useState<string>(cfg.model || '');
   const [models, setModels] = useState<PolModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+
+  // Custom-dropdown state — we ditched the native <select> because option
+  // styling is unreliable across browsers (white pop-out on dark theme,
+  // truncated descriptions). Pattern is borrowed from PollinationsPanel.tsx.
+  const [modelQuery, setModelQuery] = useState('');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
 
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -122,6 +133,19 @@ export const CoverRegenModal: React.FC<Props> = ({ song, token, onClose, onCover
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // Click-outside closes the model picker. Same pattern as PollinationsPanel.
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setModelPickerOpen(false);
+        setModelQuery('');
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [modelPickerOpen]);
 
   const handleGenerate = useCallback(async () => {
     setError('');
@@ -248,22 +272,33 @@ export const CoverRegenModal: React.FC<Props> = ({ song, token, onClose, onCover
 
   const current = history[selectedIdx];
 
-  // Recent + remaining models, dedup. PollinationsPanel does the same thing —
-  // we keep the modal lighter and just use a flat <select> for the dropdown,
-  // since the modal already has plenty of UI.
-  const dropdownModels = useMemo(() => {
+  // Recent + remaining models, dedup. Filtered by query when picker is open.
+  const filteredModels = useMemo(() => {
     const recent = pollinationsStorage.getRecentModels();
     const seen = new Set<string>();
-    const out: PolModelInfo[] = [];
+    const ordered: PolModelInfo[] = [];
     for (const id of recent) {
       const m = models.find(x => x.id === id);
-      if (m && !seen.has(m.id)) { seen.add(m.id); out.push(m); }
+      if (m && !seen.has(m.id)) { seen.add(m.id); ordered.push(m); }
     }
     for (const m of models) {
-      if (!seen.has(m.id)) { seen.add(m.id); out.push(m); }
+      if (!seen.has(m.id)) { seen.add(m.id); ordered.push(m); }
     }
-    return out;
-  }, [models]);
+    const q = modelQuery.toLowerCase().trim();
+    if (!q) return ordered;
+    return ordered.filter(m =>
+      m.id.toLowerCase().includes(q) ||
+      (m.description || '').toLowerCase().includes(q)
+    );
+  }, [models, modelQuery]);
+
+  // Resolved label for the selected model (with description) when the
+  // dropdown is closed and we want to show the current selection.
+  const selectedModelLabel = useMemo(() => {
+    const m = models.find(x => x.id === model);
+    if (!m) return model;
+    return m.description ? `${m.id} — ${m.description}` : m.id;
+  }, [models, model]);
 
   return (
     <div
@@ -271,11 +306,11 @@ export const CoverRegenModal: React.FC<Props> = ({ song, token, onClose, onCover
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-white/5 flex flex-col max-h-[90vh] overflow-hidden"
+        className="w-full max-w-4xl bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-white/5 flex flex-col max-h-[90vh] overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-white/5">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-white/5 flex-shrink-0">
           <div className="flex items-center gap-2">
             <Sparkles size={16} className="text-pink-500" />
             <h2 className="text-sm font-semibold">
@@ -292,64 +327,102 @@ export const CoverRegenModal: React.FC<Props> = ({ song, token, onClose, onCover
           </button>
         </div>
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {/* Model dropdown */}
-          <div>
-            <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-              {t('coverRegen.model') || 'Model'}
-            </label>
-            <select
-              value={model}
-              onChange={e => setModel(e.target.value)}
-              disabled={modelsLoading}
-              className="w-full mt-1 bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1.5 text-xs"
-            >
-              {!model && (
-                <option value="" disabled>
-                  {modelsLoading
+        {/* Body — two-column layout on md+, stacked on mobile */}
+        <div className="flex-1 overflow-y-auto md:overflow-hidden md:flex md:flex-row">
+          {/* LEFT — settings column. Fixed width on desktop, full-width on mobile. */}
+          <div className="md:w-80 md:flex-shrink-0 md:border-r md:border-zinc-200 md:dark:border-white/5 p-4 space-y-3 md:overflow-y-auto md:custom-scrollbar">
+            {/* Model picker — custom dropdown so the option list inherits
+                our dark theme and doesn't truncate descriptions. */}
+            <div ref={pickerRef} className="relative">
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                {t('coverRegen.model') || 'Model'}
+              </label>
+              <div className="relative mt-1">
+                <Search
+                  size={12}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none"
+                />
+                <input
+                  type="text"
+                  value={modelPickerOpen ? modelQuery : selectedModelLabel}
+                  onChange={e => { setModelQuery(e.target.value); setModelPickerOpen(true); }}
+                  onFocus={() => { setModelPickerOpen(true); setModelQuery(''); }}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') {
+                      setModelPickerOpen(false);
+                      setModelQuery('');
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                  placeholder={modelsLoading
                     ? (t('coverRegen.modelsLoading') || 'Loading models…')
                     : (t('coverRegen.modelsPick') || 'Pick a model…')}
-                </option>
+                  disabled={modelsLoading}
+                  className={`w-full bg-white dark:bg-black/40 border rounded pl-7 pr-2 py-1.5 text-xs truncate
+                    ${!model ? 'border-amber-500/60' : 'border-zinc-200 dark:border-white/10'}
+                    focus:outline-none focus:border-pink-500/60`}
+                />
+              </div>
+              {modelPickerOpen && (
+                <div className="absolute z-10 mt-1 w-full max-h-72 overflow-y-auto custom-scrollbar border border-zinc-200 dark:border-white/10 rounded bg-white dark:bg-zinc-900 shadow-lg">
+                  {filteredModels.length === 0 && (
+                    <div className="px-2 py-2 text-[11px] text-zinc-500">
+                      {modelsLoading
+                        ? (t('coverRegen.modelsLoading') || 'Loading models…')
+                        : (t('coverRegen.modelsPick') || 'No models found')}
+                    </div>
+                  )}
+                  {filteredModels.map(m => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        setModel(m.id);
+                        setModelPickerOpen(false);
+                        setModelQuery('');
+                      }}
+                      className={`w-full text-left px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-white/5
+                        ${m.id === model ? 'bg-pink-50 dark:bg-pink-500/10' : ''}`}
+                    >
+                      <div className={`font-medium truncate ${m.id === model ? 'text-pink-600 dark:text-pink-400' : ''}`}>
+                        {m.id}
+                      </div>
+                      {m.description && (
+                        <div className="text-[10px] text-zinc-500 truncate">{m.description}</div>
+                      )}
+                    </button>
+                  ))}
+                </div>
               )}
-              {dropdownModels.map(m => (
-                <option key={m.id} value={m.id}>
-                  {m.id}{m.description ? ` — ${m.description.slice(0, 60)}` : ''}
-                </option>
-              ))}
-            </select>
-            {!cfg.apiKey && (
-              <p className="text-[10px] text-zinc-500 mt-1">
-                {t('coverRegen.noKeyHint') ||
-                  'Anonymous tier — slower, may include watermark. Set API key in the Pollinations panel.'}
-              </p>
-            )}
-          </div>
+              {!cfg.apiKey && (
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  {t('coverRegen.noKeyHint') ||
+                    'Anonymous tier — slower, may include watermark. Set API key in the Pollinations panel.'}
+                </p>
+              )}
+            </div>
 
-          {/* Prompt */}
-          <div>
-            <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-              {t('coverRegen.prompt') || 'Prompt'}
-            </label>
-            <textarea
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              rows={3}
-              className="w-full mt-1 bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1.5 text-xs resize-none"
-              placeholder={t('coverRegen.promptPlaceholder') || 'Describe the cover image…'}
-            />
-          </div>
+            {/* Prompt — taller textarea on desktop since we have the room */}
+            <div>
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                {t('coverRegen.prompt') || 'Prompt'}
+              </label>
+              <textarea
+                value={prompt}
+                onChange={e => setPrompt(e.target.value)}
+                rows={6}
+                className="w-full mt-1 bg-white dark:bg-black/40 border border-zinc-200 dark:border-white/10 rounded px-2 py-1.5 text-xs resize-none focus:outline-none focus:border-pink-500/60"
+                placeholder={t('coverRegen.promptPlaceholder') || 'Describe the cover image…'}
+              />
+            </div>
 
-          {/* Generate + Upload buttons. Upload is the secondary action — same
-              visual prominence by sharing the row, but neutral background.
-              Selecting a file pushes it into history just like a generated
-              image, so Save / preview / try-again all work uniformly. */}
-          <div className="flex gap-2">
+            {/* Action buttons. Generate is the primary CTA, Upload is an
+                alternate path that bypasses Pollinations entirely. */}
             <button
               type="button"
               onClick={handleGenerate}
               disabled={generating || saving || !model || !prompt.trim()}
-              className="flex-1 px-3 py-2 text-xs font-medium bg-pink-600 hover:bg-pink-700 disabled:bg-zinc-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed text-white rounded transition-colors flex items-center justify-center gap-2"
+              className="w-full px-3 py-2 text-xs font-medium bg-pink-600 hover:bg-pink-700 disabled:bg-zinc-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed text-white rounded transition-colors flex items-center justify-center gap-2"
             >
               {generating
                 ? (<><Loader2 size={12} className="animate-spin" />{t('coverRegen.generating') || 'Generating…'}</>)
@@ -358,12 +431,13 @@ export const CoverRegenModal: React.FC<Props> = ({ song, token, onClose, onCover
                   : (<><Sparkles size={12} />{t('coverRegen.generate') || 'Generate'}</>)
               }
             </button>
+
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={generating || saving}
               title={t('coverRegen.uploadTooltip') || 'Upload your own image (JPEG/PNG/WEBP, max 10MB)'}
-              className="px-3 py-2 text-xs font-medium bg-zinc-200 dark:bg-zinc-800 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-700 dark:text-zinc-200 rounded transition-colors flex items-center gap-1.5"
+              className="w-full px-3 py-2 text-xs font-medium bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-white/10 rounded transition-colors flex items-center justify-center gap-1.5"
             >
               <Upload size={12} />
               {t('coverRegen.upload') || 'Upload'}
@@ -380,51 +454,81 @@ export const CoverRegenModal: React.FC<Props> = ({ song, token, onClose, onCover
                 if (file) handleUploadFile(file);
               }}
             />
+
+            {error && (
+              <p className="text-xs text-red-500 px-1">{error}</p>
+            )}
           </div>
 
-          {error && (
-            <p className="text-xs text-red-500 px-1">{error}</p>
-          )}
-
-          {/* Preview area */}
-          {current ? (
-            <div className="space-y-2">
-              <div className="aspect-square w-full max-w-sm mx-auto bg-zinc-100 dark:bg-black/40 rounded overflow-hidden border border-zinc-200 dark:border-white/5">
-                <img
-                  src={current.url}
-                  alt="Generated cover"
-                  className="w-full h-full object-cover"
-                />
-              </div>
-              <p className="text-[10px] text-zinc-500 text-center">
-                {current.model} · seed {current.seed}
-              </p>
-
-              {/* History thumbs (up to 6) */}
-              {history.length > 1 && (
-                <div className="grid grid-cols-6 gap-1.5">
-                  {history.map((h, i) => (
-                    <button
-                      key={h.url}
-                      type="button"
-                      onClick={() => setSelectedIdx(i)}
-                      className={`aspect-square rounded overflow-hidden border-2 transition-colors ${i === selectedIdx ? 'border-pink-500' : 'border-transparent hover:border-zinc-300 dark:hover:border-white/10'}`}
-                    >
-                      <img src={h.url} alt={`Variant ${i + 1}`} className="w-full h-full object-cover" />
-                    </button>
-                  ))}
+          {/* RIGHT — preview column. Big square preview that scales to fill
+              the available space, with a history strip pinned at the bottom. */}
+          <div className="flex-1 p-4 flex flex-col gap-3 md:overflow-hidden bg-zinc-50/50 dark:bg-black/20">
+            {/* Big preview — flex-1 + min-h-0 lets it actually shrink to fit
+                the modal height instead of overflowing on small viewports. */}
+            <div className="flex-1 min-h-0 flex items-center justify-center">
+              {current ? (
+                <div className="relative aspect-square h-full max-h-full max-w-full bg-zinc-100 dark:bg-black/40 rounded-lg overflow-hidden border border-zinc-200 dark:border-white/5 shadow-sm">
+                  <img
+                    src={current.url}
+                    alt="Generated cover"
+                    className="w-full h-full object-cover"
+                  />
+                  {/* Generating-overlay so iterating ("Try again") doesn't make
+                      the user stare at a blank canvas while keeping context. */}
+                  {generating && (
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center backdrop-blur-[2px]">
+                      <Loader2 size={32} className="animate-spin text-white" />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="aspect-square h-full max-h-full max-w-full rounded-lg border border-dashed border-zinc-300 dark:border-white/10 flex flex-col items-center justify-center text-xs text-zinc-500 gap-2 p-6 text-center">
+                  {generating ? (
+                    <>
+                      <Loader2 size={32} className="animate-spin text-pink-500" />
+                      <span>{t('coverRegen.generating') || 'Generating…'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={32} className="text-zinc-400" />
+                      <span>{t('coverRegen.noPreviewYet') || 'Press Generate or Upload to start'}</span>
+                    </>
+                  )}
                 </div>
               )}
             </div>
-          ) : (
-            <div className="aspect-square w-full max-w-sm mx-auto rounded border border-dashed border-zinc-300 dark:border-white/10 flex items-center justify-center text-xs text-zinc-500">
-              {t('coverRegen.noPreviewYet') || 'Press Generate to start'}
-            </div>
-          )}
+
+            {/* Caption + history strip — only rendered when we have something */}
+            {current && (
+              <div className="flex-shrink-0 space-y-2">
+                <p className="text-[10px] text-zinc-500 text-center truncate">
+                  {current.model}
+                  {current.seed > 0 ? ` · seed ${current.seed}` : ''}
+                </p>
+                {history.length > 1 && (
+                  <div className="grid grid-cols-6 gap-1.5">
+                    {history.map((h, i) => (
+                      <button
+                        key={h.url}
+                        type="button"
+                        onClick={() => setSelectedIdx(i)}
+                        className={`aspect-square rounded overflow-hidden border-2 transition-colors
+                          ${i === selectedIdx
+                            ? 'border-pink-500'
+                            : 'border-transparent hover:border-zinc-300 dark:hover:border-white/10'}`}
+                      >
+                        <img src={h.url} alt={`Variant ${i + 1}`} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Footer — Save action only enabled when there's something to save */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-zinc-200 dark:border-white/5">
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-zinc-200 dark:border-white/5 flex-shrink-0">
           <button
             type="button"
             onClick={onClose}

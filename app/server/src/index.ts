@@ -57,7 +57,12 @@ app.use(helmet({
       fontSrc: ["'self'", 'https:', 'data:'],
       formAction: ["'self'"],
       frameAncestors: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'https:'],
+      // `blob:` is required for the cover-regen modal preview — generated
+      // images come back as Blob from gen.pollinations.ai and we render them
+      // via `<img src={URL.createObjectURL(blob)}>`. Without `blob:` here
+      // the preview shows as a broken image even though the bytes are fine
+      // (Save still works, but the user can't see what they're saving).
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
       objectSrc: ["'none'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdn.tailwindcss.com', 'https://esm.sh'],
       scriptSrcAttr: ["'none'"],

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-05-05
+
+### Added
+- **OpenRouter LLM provider** — bring-your-own-key alternative to the local LM. Pick any model (Claude, GPT-4o, DeepSeek, Llama 3.x, 200+ supported, **including many free ones — DeepSeek R1 free, Llama 3.3 free, Gemini 2.0 free etc.**), get instant lyrics + caption + BPM/key/duration metadata + a visual `coverPrompt` from a one-line description. Persists model choice across sessions, streams output with a real-time preview. Local LM keeps working in parallel — toggle anytime, both modes coexist.
+- **Pollinations.ai auto cover generation** — server-side, parallel with audio render, fire-and-forget. Never blocks the audio pipeline; cover_url is filled via background UPDATE 5–30 s after audio completes. 16 art-style modifiers picked deterministically by seed for visual diversity across songs sharing a caption. **Anonymous tier is fully free** (no account needed, just slower); optional tokens (`pk_…` / `sk_…` from auth.pollinations.ai) lift to Seed tier (1 req/5 s, no watermark, full model catalogue).
+- **Manual cover regeneration modal** — `ImagePlus` button on every owned song row in SongList and in the RightSidebar Main Actions. Lets the user pick any Pollinations image model, write a custom prompt, *Try again* until satisfied, **or upload a custom image from disk** (JPEG/PNG/WEBP, max 10 MB). The picked image replaces both `songs.cover_url` AND the embedded ID3 cover frame inside the MP3, so any external player sees the new picture in downloads.
+- **LLM `coverPrompt` field** in SongDraft schema — the OpenRouter system prompt now also asks for a 1–2 sentence visual album-cover description per song, fed straight into Pollinations along with one of 16 art-style modifiers.
+- **Queue refactor** — instant N/10 click counter, instant placeholder card at click time (no more 20-second wait staring at an empty list while LLM pre-flight runs), FIFO drain barrier so bulk clicks chain through pre-flight + audio sequentially.
+- **i18n** — 49 new keys × 5 languages (en/ru/zh/ja/ko) for stage labels, Pollinations panel, OpenRouter panel, cover-regen modal.
+
+### Fixed
+- **`resetGeneration` queue deadlock** — the global Reset-all button cleared `activeJobsRef` but never called `drainQueueWaiters()` or reset `pendingClickCount`, so any pre-flight click parked on `waitForJobsToDrain` would hang forever and the badge stayed stuck.
+- **Simple-mode + local LM + Pollinations toggle ON** — Simple-mode `onGenerate` payload didn't include the `pollinations` field, so backend `startCoverGen` was never called → covers silently never generated. Now threaded through both Simple and Custom branches.
+- **Auto-pipeline race vs manual cover save** — gate the auto-pipeline `attachCover` UPDATE on `cover_url IS NULL` so a user's manual save during in-flight Pollinations gen is never silently overwritten.
+- **Orphan cover file on extension change** — manual `.webp` upload over an existing `/audio/.../{songId}.jpg` left the old file on disk forever. The endpoint now deletes the previous local cover when the extension differs.
+- **Cover-jobs Map resurrection** — added a tombstone Set so an in-flight Pollinations Promise resolving after `consumeCoverState` no longer re-inserts the entry (~300 KB Buffer leak per cancel/fail averted).
+- **`handleGenerate` auth-bail leak** — if `isAuthenticated/token` flipped false between CreatePanel click and the App.tsx handler, the placeholder card and `pendingClickCount` slot were leaked. Now both are cleaned up before showing the username modal.
+- **`clampInt('')` UX** in PollinationsPanel — width/height inputs no longer snap to 256 the moment the user clears the field to retype a different number.
+
+### Changed
+- **CSP `connectSrc`** allows `gen.pollinations.ai`, `image.pollinations.ai`, `openrouter.ai`. Browser-direct fetches to OpenRouter and Pollinations work without a server proxy.
+- **Storage abstraction** gained an optional `read(key)` method (Local implements; remote providers like S3 may omit so callers fall back to skipping retag instead of paying a download).
+
 ## 2026-05-04
 
 ### Added
