@@ -750,14 +750,10 @@ const SongItem: React.FC<SongItemProps> = ({
                                     }}
                                 />
                             </div>
-                            {onCancelJob && (
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); onCancelJob(); }}
-                                    className="text-[11px] text-zinc-500 hover:text-red-400 transition-colors mt-1"
-                                >
-                                    {t('cancelGeneration')}
-                                </button>
-                            )}
+                            {/* Cancel button removed here — there's already one rendered
+                                next to the stage label on the right side of the row, which
+                                stays in sync with the Reset state. Two buttons in a single
+                                card looked like an accidental duplicate. */}
                         </div>
                     )}
                 </div>
