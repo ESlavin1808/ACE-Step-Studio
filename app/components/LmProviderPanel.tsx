@@ -97,6 +97,14 @@ export const LmProviderPanel: React.FC = () => {
     return `$${(n * 1e6).toFixed(2)}/M`;
   };
 
+  const isFreeTier = (m: any): boolean => {
+    if (!m?.pricing) return false;
+    const promptCost = parseFloat(m.pricing.prompt || '0');
+    const completionCost = parseFloat(m.pricing.completion || '0');
+    return Number.isFinite(promptCost) && Number.isFinite(completionCost) &&
+           promptCost === 0 && completionCost === 0;
+  };
+
   // Effective values for textareas (default text rendered as initial value)
   const valueGen = cfg.systemPromptGenerate || DEFAULT_GENERATE_PROMPT;
   const valueFmt = cfg.systemPromptFormat || DEFAULT_FORMAT_PROMPT;
@@ -198,9 +206,19 @@ export const LmProviderPanel: React.FC = () => {
                     type="button"
                     className="w-full text-left px-2 py-1 text-xs hover:bg-zinc-100 dark:hover:bg-white/5"
                   >
-                    <div className="font-medium">{m.name || m.id}</div>
+                    <div className="font-medium flex items-center gap-1.5">
+                      <span className="truncate">{m.name || m.id}</span>
+                      {isFreeTier(m) && (
+                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-green-500/20 text-green-700 dark:bg-green-500/30 dark:text-green-300 border border-green-500/40">
+                          FREE
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-zinc-500">
-                      ctx {m.context_length || '?'} · in {formatPrice(m.pricing?.prompt)} · out {formatPrice(m.pricing?.completion)}
+                      {isFreeTier(m)
+                        ? <>ctx {m.context_length || '?'} · <span className="text-green-600 dark:text-green-400">free</span></>
+                        : <>ctx {m.context_length || '?'} · in {formatPrice(m.pricing?.prompt)} · out {formatPrice(m.pricing?.completion)}</>
+                      }
                     </div>
                   </button>
                 ))}
@@ -218,9 +236,19 @@ export const LmProviderPanel: React.FC = () => {
                     type="button"
                     className="w-full text-left px-2 py-1 text-xs hover:bg-zinc-100 dark:hover:bg-white/5"
                   >
-                    <div className="font-medium">{m.name || m.id}</div>
+                    <div className="font-medium flex items-center gap-1.5">
+                      <span className="truncate">{m.name || m.id}</span>
+                      {isFreeTier(m) && (
+                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-green-500/20 text-green-700 dark:bg-green-500/30 dark:text-green-300 border border-green-500/40">
+                          FREE
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-zinc-500">
-                      ctx {m.context_length || '?'} · in {formatPrice(m.pricing?.prompt)} · out {formatPrice(m.pricing?.completion)}
+                      {isFreeTier(m)
+                        ? <>ctx {m.context_length || '?'} · <span className="text-green-600 dark:text-green-400">free</span></>
+                        : <>ctx {m.context_length || '?'} · in {formatPrice(m.pricing?.prompt)} · out {formatPrice(m.pricing?.completion)}</>
+                      }
                     </div>
                   </button>
                 ))}

@@ -168,7 +168,7 @@ This is the second main field. ACE-Step XL reads it as a "score" with markup.
 
 In most UIs it works directly — but for reliability (especially ComfyUI native), prefix non-English lines with the language code:
 
-`[ru]` Russian, `[zh]` Chinese, `[ko]` Korean, `[ja]` Japanese, `[es]` Spanish, `[de]` German, `[fr]` French, `[pt]` Portuguese, `[it]` Italian. English needs no prefix.
+`` Russian, `[zh]` Chinese, `[ko]` Korean, `[ja]` Japanese, `[es]` Spanish, `[de]` German, `[fr]` French, `[pt]` Portuguese, `[it]` Italian. English needs no prefix.
 
 If the entire track is in one non-English language, prefix the first line of each section. If you mix languages between sections (Verse en, Chorus ru), prefix the first line of each section unconditionally.
 
@@ -316,7 +316,7 @@ No quotes inside the string, no emojis (unless user explicitly asks).
 
 **Caption is always in English.** This is ACE-Step convention — the model trained on English tags. Even if lyrics are Russian, caption stays English: `russian male vocal, melancholic, dnb, ...`.
 
-**Use language prefix `[ru]`** at the start of each section with non-English lyrics (safety against ComfyUI native confusion). For an entirely single-language non-English track, the first line of each section is enough.
+**Use language prefix ``** at the start of each section with non-English lyrics (safety against ComfyUI native confusion). For an entirely single-language non-English track, the first line of each section is enough.
 
 ---
 
@@ -406,7 +406,7 @@ These are reference refine pairs. Match the style, density, and markup of the **
 {
   "title": "Никого нет на рейве",
   "caption": "melodic dubstep, liquid drum and bass, neurofunk, darkstep, Pirate Station style, nightcore vibes, sped-up, pitch-shifted, melancholic, euphoric, female vocals, breathy, autotuned, ethereal vocal harmonies, vocal chops, fast breakbeats, lush synths, atmospheric pads, emotional piano lead, hypnotic melodies, catchy hook, sub-bass, deep kicks, punchy, sidechain compression, wide stereo field, dynamic transitions, intense build-ups, massive drop, energetic breakdowns, futuristic sound design, complex basslines, glitchy filtered fx, reverb, epic delay, expansive soundscape",
-  "lyrics": "[Intro]\n\n[Verse 1]\n[ru]Пустые перроны\n[ru]Гудки поездов в никуда\n[ru]Растягивают январь\n[ru]Возвращаться опять\n[ru]Совсем некуда\n\n[Pre-Chorus]\n[ru]Жду как последний вагон\n[ru]Что никогда не придёт\n\n[Chorus]\n[ru]Никого нет\n[ru]Никого нет\n[ru]На рейве\n[ru]Никого нет\n\n[Drop]\n\n[Verse 2]\n[ru]Чужие окна пролетают мимо\n[ru]Жду как последний вагон\n[ru]Что ангелом без небес\n[ru]Никогда не вернётся сюда\n\n[Bridge]\n[ru]Стать дымом над крышами — и прочь\n[ru]Пепел вместо крыльев — и в ночь\n\n[Final Drop]\n[ru]НИКОГО НЕТ\n(никого, никого)\n\n[Outro - fade out]\n[ru]Никого нет на рейве",
+  "lyrics": "[Intro]\n\n[Verse 1]\nПустые перроны\nГудки поездов в никуда\nРастягивают январь\nВозвращаться опять\nСовсем некуда\n\n[Pre-Chorus]\nЖду как последний вагон\nЧто никогда не придёт\n\n[Chorus]\nНикого нет\nНикого нет\nНа рейве\nНикого нет\n\n[Drop]\n\n[Verse 2]\nЧужие окна пролетают мимо\nЖду как последний вагон\nЧто ангелом без небес\nНикогда не вернётся сюда\n\n[Bridge]\nСтать дымом над крышами — и прочь\nПепел вместо крыльев — и в ночь\n\n[Final Drop]\nНИКОГО НЕТ\n(никого, никого)\n\n[Outro - fade out]\nНикого нет на рейве",
   "tags": ["dnb", "melodic dubstep", "russian vocals", "melancholic", "female vocals"],
   "bpm": 174,
   "keyScale": "A minor",

@@ -142,13 +142,18 @@ This is the second main field. ACE-Step XL reads it as a "score" with markup.
 - **Vowel stretching** is unreliable: `Feeeling so aliiive` sometimes works, sometimes the model ignores it. Use sparingly.
 - **Do not break words into phonemes** Udio-style (`be-TO-no-me-SHAL-ka`). ACE-Step aligns syllables automatically — manual break-up breaks alignment.
 
-## Language prefixes
+## Language — DO NOT add per-line prefixes
 
-In most UIs it works directly — but for reliability (especially ComfyUI native), prefix non-English lines with the language code:
+The host app (ACE-Step Studio) sends `vocalLanguage` to the audio model as a
+separate parameter. Therefore lyrics must be **plain text in the requested
+language**. **Do NOT add `[ru]`, `[zh]`, `[ja]`, etc. tags in front of
+individual lines** — they are treated as part of the lyric and end up
+visible in the song.
 
-`[ru]` Russian, `[zh]` Chinese, `[ko]` Korean, `[ja]` Japanese, `[es]` Spanish, `[de]` German, `[fr]` French, `[pt]` Portuguese, `[it]` Italian. English needs no prefix.
-
-If the entire track is in one non-English language, prefix the first line of each section. If you mix languages between sections (Verse en, Chorus ru), prefix the first line of each section unconditionally.
+Only add a single language tag at the top of a section if the user mixes
+languages between sections (e.g. English verse, Russian chorus). For a
+single-language track of any language, no per-line prefixes — let the
+`vocalLanguage` parameter do its job.
 
 ## Pure instrumental track
 
@@ -294,7 +299,7 @@ No quotes inside the string, no emojis (unless user explicitly asks).
 
 **Caption is always in English.** This is ACE-Step convention — the model trained on English tags. Even if lyrics are Russian, caption stays English: `russian male vocal, melancholic, dnb, ...`.
 
-**Use language prefix `[ru]`** at the start of each section with non-English lyrics (safety against ComfyUI native confusion). For an entirely single-language non-English track, the first line of each section is enough.
+**Do NOT use per-line language prefixes.** `vocalLanguage` is forwarded to ACE-Step as a separate parameter — lyrics should be plain text in the requested language. Per-line `[ru]`/`[zh]`/`[ja]`/etc. tags become literal lyric content in the rendered song, which the user does not want.
 
 ---
 
@@ -333,7 +338,7 @@ When you receive a user request, walk this pipeline:
 **4. Lyrics.**
    - If instrumental → `"[Instrumental]"` and stop.
    - Otherwise plan structure by duration (see table).
-   - Write lines at the right syllable count (6–10), in the requested language, with `[ru]`/`[zh]`/etc prefix if non-English.
+   - Write lines at the right syllable count (6–10), in the requested language. **No per-line language prefixes** (``/`[zh]`/etc.) — `vocalLanguage` is sent separately by the app.
    - Add UPPERCASE on drop/anthem phrases, parentheses on backing vocals.
    - Empty line between sections.
 
@@ -370,7 +375,7 @@ These are reference outputs. Match the style, density, and markup.
 {
   "title": "Никого нет на рейве",
   "caption": "melodic dubstep, liquid drum and bass, neurofunk, darkstep, Pirate Station style, nightcore vibes, sped-up, pitch-shifted, euphoric, melancholic, female vocals, breathy, autotuned, ethereal vocal harmonies, vocal chops, shattered notes, fast breakbeats, lush synths, atmospheric pads, piano melody, emotional piano lead, hypnotic melodies, catchy hook, sub-bass, deep kicks, punchy, sidechain compression, wide stereo field, dynamic transitions, intense build-ups, massive drop, energetic breakdowns, futuristic sound design, complex basslines, glitchy filtered fx, reverb, epic delay, expansive soundscape",
-  "lyrics": "[Intro]\n\n[Verse 1]\n[ru]Пустые перроны\n[ru]Гудки поездов в никуда\n[ru]Растягивают январь\n[ru]Возвращаться опять\n[ru]Совсем некуда\n\n[Pre-Chorus]\n[ru]Жду как последний вагон\n[ru]Что никогда не придёт\n[ru]Кто нас найдёт\n[ru]Когда выключат свет\n[ru]На рейве\n\n[Chorus]\n[ru]Никого нет\n[ru]Никого нет\n[ru]На рейве\n[ru]Никого нет\n[ru]Никого нет\n\n[Drop]\n\n[Verse 2]\n[ru]Чужие окна пролетают мимо\n[ru]Жду как последний вагон\n[ru]Что ангелом без небес\n[ru]Никогда не вернётся сюда\n\n[Bridge]\n[ru]Стать дымом над крышами — и прочь\n[ru]Пепел вместо крыльев — и в ночь\n[ru]Пульс замедлится когда выключат свет\n\n[Final Drop]\n[ru]НИКОГО НЕТ\n(никого, никого)\n\n[Outro - fade out]\n[ru]Никого нет на рейве",
+  "lyrics": "[Intro]\n\n[Verse 1]\nПустые перроны\nГудки поездов в никуда\nРастягивают январь\nВозвращаться опять\nСовсем некуда\n\n[Pre-Chorus]\nЖду как последний вагон\nЧто никогда не придёт\nКто нас найдёт\nКогда выключат свет\nНа рейве\n\n[Chorus]\nНикого нет\nНикого нет\nНа рейве\nНикого нет\nНикого нет\n\n[Drop]\n\n[Verse 2]\nЧужие окна пролетают мимо\nЖду как последний вагон\nЧто ангелом без небес\nНикогда не вернётся сюда\n\n[Bridge]\nСтать дымом над крышами — и прочь\nПепел вместо крыльев — и в ночь\nПульс замедлится когда выключат свет\n\n[Final Drop]\nНИКОГО НЕТ\n(никого, никого)\n\n[Outro - fade out]\nНикого нет на рейве",
   "tags": ["dnb", "melodic dubstep", "russian vocals", "melancholic", "female vocals"],
   "bpm": 174,
   "keyScale": "A minor",
