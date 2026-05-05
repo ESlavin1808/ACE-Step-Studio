@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Song } from '../types';
-import { Heart, Share2, Play, Pause, MoreHorizontal, X, Copy, Wand2, MoreVertical, Download, Repeat, Video, Music, Link as LinkIcon, Sparkles, Globe, Lock, Trash2, Edit3, Layers, ChevronDown, ClipboardCopy } from 'lucide-react';
+import { Heart, Share2, Play, Pause, MoreHorizontal, X, Copy, Wand2, MoreVertical, Download, Repeat, Video, Music, Link as LinkIcon, Sparkles, Globe, Lock, Trash2, Edit3, Layers, ChevronDown, ClipboardCopy, ImagePlus } from 'lucide-react';
 import { songsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
@@ -12,6 +12,7 @@ interface RightSidebarProps {
     song: Song | null;
     onClose?: () => void;
     onOpenVideo?: () => void;
+    onOpenCoverRegen?: () => void;
     onReuse?: (song: Song) => void;
     onSongUpdate?: (song: Song) => void;
     onNavigateToProfile?: (username: string) => void;
@@ -25,7 +26,7 @@ interface RightSidebarProps {
     currentSong?: Song | null;
 }
 
-export const RightSidebar: React.FC<RightSidebarProps> = ({ song, onClose, onOpenVideo, onReuse, onSongUpdate, onNavigateToProfile, onNavigateToSong, isLiked, onToggleLike, onDelete, onAddToPlaylist, onPlay, isPlaying, currentSong }) => {
+export const RightSidebar: React.FC<RightSidebarProps> = ({ song, onClose, onOpenVideo, onOpenCoverRegen, onReuse, onSongUpdate, onNavigateToProfile, onNavigateToSong, isLiked, onToggleLike, onDelete, onAddToPlaylist, onPlay, isPlaying, currentSong }) => {
     const { token, user } = useAuth();
     const { t } = useI18n();
     const [showMenu, setShowMenu] = useState(false);
@@ -296,6 +297,16 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({ song, onClose, onOpe
                         >
                             <Video size={18} strokeWidth={1.5} />
                         </button>
+                        {/* Cover regen — only meaningful for owner; backend would 403 anyway */}
+                        {isOwner && (
+                            <button
+                                onClick={onOpenCoverRegen}
+                                title={t('coverRegen.openTooltip') || 'Regenerate cover'}
+                                className="p-3 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white hover:bg-zinc-300/50 dark:hover:bg-white/10 rounded-xl transition-all duration-200"
+                            >
+                                <ImagePlus size={18} strokeWidth={1.5} />
+                            </button>
+                        )}
                         <button
                             onClick={() => {
                                 if (!song?.audioUrl) return;

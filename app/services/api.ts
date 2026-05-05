@@ -253,6 +253,26 @@ export const songsApi = {
   togglePrivacy: (id: string, token: string): Promise<{ isPublic: boolean }> =>
     api(`/api/songs/${id}/privacy`, { method: 'PATCH', token }),
 
+  // Persist a manually picked cover image. The blob comes from the
+  // CoverRegenModal — we generate it client-side via gen.pollinations.ai and
+  // upload it to the same `${userId}/covers/${songId}.{ext}` path the
+  // auto-pipeline uses, replacing the previous file in place.
+  regenCover: async (id: string, blob: Blob, token: string): Promise<{ coverUrl: string }> => {
+    const fd = new FormData();
+    // Backend looks for the field name "cover" in coverUpload.single('cover').
+    fd.append('cover', blob);
+    const res = await fetch(`/api/songs/${id}/regen-cover`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`regen-cover failed ${res.status}: ${errText || res.statusText}`);
+    }
+    return res.json();
+  },
+
   trackPlay: (id: string, token?: string | null): Promise<{ viewCount: number }> =>
     api(`/api/songs/${id}/play`, { method: 'POST', token: token || undefined }),
 

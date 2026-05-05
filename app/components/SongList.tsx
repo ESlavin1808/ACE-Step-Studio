@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Song } from '../types';
-import { Play, MoreHorizontal, Heart, ThumbsDown, ListPlus, Pause, Search, Filter, Check, Globe, Lock, Loader2, ThumbsUp, Share2, Video, Info, Clock, Timer } from 'lucide-react';
+import { Play, MoreHorizontal, Heart, ThumbsDown, ListPlus, Pause, Search, Filter, Check, Globe, Lock, Loader2, ThumbsUp, Share2, Video, Info, Clock, Timer, ImagePlus } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
 import { SongDropdownMenu } from './SongDropdownMenu';
@@ -20,6 +20,7 @@ interface SongListProps {
     onToggleLike: (songId: string) => void;
     onAddToPlaylist: (song: Song) => void;
     onOpenVideo?: (song: Song) => void;
+    onOpenCoverRegen?: (song: Song) => void;
     onShowDetails?: (song: Song) => void;
     onNavigateToProfile?: (username: string) => void;
     onReusePrompt?: (song: Song) => void;
@@ -100,6 +101,7 @@ export const SongList: React.FC<SongListProps> = ({
     onToggleLike,
     onAddToPlaylist,
     onOpenVideo,
+    onOpenCoverRegen,
     onShowDetails,
     onNavigateToProfile,
     onReusePrompt,
@@ -413,6 +415,7 @@ export const SongList: React.FC<SongListProps> = ({
                                     onToggleLike={() => onToggleLike(item.song.id)}
                                     onAddToPlaylist={() => onAddToPlaylist(item.song)}
                                     onOpenVideo={() => onOpenVideo && onOpenVideo(item.song)}
+                                    onOpenCoverRegen={() => onOpenCoverRegen && onOpenCoverRegen(item.song)}
                                     onShowDetails={() => onShowDetails && onShowDetails(item.song)}
                                     onNavigateToProfile={onNavigateToProfile}
                                     onReusePrompt={() => onReusePrompt?.(item.song)}
@@ -468,6 +471,7 @@ interface SongItemProps {
     onToggleLike: () => void;
     onAddToPlaylist: () => void;
     onOpenVideo?: () => void;
+    onOpenCoverRegen?: () => void;
     onShowDetails?: () => void;
     onNavigateToProfile?: (username: string) => void;
     onReusePrompt?: () => void;
@@ -494,6 +498,7 @@ const SongItem: React.FC<SongItemProps> = ({
     onToggleLike,
     onAddToPlaylist,
     onOpenVideo,
+    onOpenCoverRegen,
     onShowDetails,
     onNavigateToProfile,
     onReusePrompt,
@@ -778,6 +783,19 @@ const SongItem: React.FC<SongItemProps> = ({
                         >
                             <Video size={16} />
                         </button>
+
+                        {/* Manual cover regeneration — opens CoverRegenModal where the user can
+                            pick a model + prompt and either generate via Pollinations or
+                            upload a custom image from disk. Only shown for owned songs. */}
+                        {isOwner && (
+                            <button
+                                className="p-2 rounded-full hover:bg-zinc-200 dark:hover:bg-white/5 text-zinc-400 hover:text-black dark:hover:text-white transition-colors"
+                                onClick={(e) => { e.stopPropagation(); if (onOpenCoverRegen) onOpenCoverRegen(); }}
+                                title={t('coverRegen.openTooltip') || 'Regenerate cover'}
+                            >
+                                <ImagePlus size={16} />
+                            </button>
+                        )}
 
                         <button
                             className="p-2 rounded-full hover:bg-zinc-200 dark:hover:bg-white/5 text-zinc-400 hover:text-black dark:hover:text-white transition-colors ml-auto"

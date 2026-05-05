@@ -7,6 +7,7 @@ import { Player } from './components/Player';
 import { LibraryView } from './components/LibraryView';
 import { CreatePlaylistModal, AddToPlaylistModal } from './components/PlaylistModals';
 import { VideoGeneratorModal } from './components/VideoGeneratorModal';
+import { CoverRegenModal } from './components/CoverRegenModal';
 import { UsernameModal } from './components/UsernameModal';
 import { UserProfile } from './components/UserProfile';
 import { SettingsModal } from './components/SettingsModal';
@@ -205,6 +206,10 @@ function AppContent() {
   // Video Modal
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [songForVideo, setSongForVideo] = useState<Song | null>(null);
+
+  // Cover regen modal — manual Pollinations / upload entry from SongList row
+  // and RightSidebar. Updates songs.cover_url via /api/songs/:id/regen-cover.
+  const [songForCoverRegen, setSongForCoverRegen] = useState<Song | null>(null);
 
   // Settings Modal
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -1565,6 +1570,21 @@ function AppContent() {
     setIsVideoModalOpen(true);
   };
 
+  const openCoverRegen = (song: Song) => {
+    // Don't pause playback here — cover regen is non-destructive and the
+    // modal is small enough that the user may want to keep listening.
+    setSongForCoverRegen(song);
+  };
+
+  // Apply the new cover URL to local state without a full /api/songs reload
+  // (the backend already wrote songs.cover_url; we just need the UI to
+  // reflect it). Cache-bust by appending a timestamp so <img> re-fetches.
+  const applyCoverUpdate = useCallback((songId: string, coverUrl: string) => {
+    const bust = `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+    setSongs(prev => prev.map(s => s.id === songId ? { ...s, coverUrl: bust } : s));
+    setSelectedSong(prev => prev?.id === songId ? { ...prev, coverUrl: bust } : prev);
+  }, []);
+
   // Handle username setup
   const handleUsernameSubmit = async (username: string) => {
     await setupUser(username);
@@ -1714,6 +1734,7 @@ function AppContent() {
                 onToggleLike={toggleLike}
                 onAddToPlaylist={openAddToPlaylistModal}
                 onOpenVideo={openVideoGenerator}
+                onOpenCoverRegen={openCoverRegen}
                 onShowDetails={handleShowDetails}
                 onNavigateToProfile={handleNavigateToProfile}
                 onReusePrompt={handleReuse}
@@ -1744,6 +1765,7 @@ function AppContent() {
                   song={selectedSong}
                   onClose={() => setShowRightSidebar(false)}
                   onOpenVideo={() => selectedSong && openVideoGenerator(selectedSong)}
+                  onOpenCoverRegen={() => selectedSong && openCoverRegen(selectedSong)}
                   onReuse={handleReuse}
                   onSongUpdate={handleSongUpdate}
                   onNavigateToProfile={handleNavigateToProfile}
@@ -1869,6 +1891,17 @@ function AppContent() {
         onClose={() => setIsVideoModalOpen(false)}
         song={songForVideo}
       />
+      {/* Cover regen modal — only mounted while a song is selected for regen.
+          Unmounting on close revokes blob URLs (see CoverRegenModal cleanup
+          effect) so generated previews don't leak across modal opens. */}
+      {songForCoverRegen && token && (
+        <CoverRegenModal
+          song={songForCoverRegen}
+          token={token}
+          onClose={() => setSongForCoverRegen(null)}
+          onCoverSaved={applyCoverUpdate}
+        />
+      )}
       <UsernameModal
         isOpen={showUsernameModal}
         onSubmit={handleUsernameSubmit}
@@ -1893,6 +1926,7 @@ function AppContent() {
               song={selectedSong}
               onClose={() => setShowMobileDetails(false)}
               onOpenVideo={() => selectedSong && openVideoGenerator(selectedSong)}
+              onOpenCoverRegen={() => selectedSong && openCoverRegen(selectedSong)}
               onReuse={handleReuse}
               onSongUpdate={handleSongUpdate}
               onNavigateToProfile={handleNavigateToProfile}
