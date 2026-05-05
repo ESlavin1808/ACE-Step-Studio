@@ -135,6 +135,9 @@ export const en = {
     // Per-stage labels shown on the in-flight song card (song.stage stores the key).
     stageWaitingInQueue: 'Waiting in queue…',
     stageGeneratingTextOpenRouter: 'Writing text via OpenRouter…',
+    stageOpenRouterConnecting: 'Connecting to OpenRouter…',
+    stageOpenRouterStreaming: 'Receiving response from model…',
+    stageOpenRouterFinalizing: 'Parsing model response…',
     stageStartingTrack: 'Starting track…',
     stageGeneratingTrack: 'Generating track…',
     stageGeneratingCover: 'Generating cover…',

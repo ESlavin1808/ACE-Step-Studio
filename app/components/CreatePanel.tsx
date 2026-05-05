@@ -1553,9 +1553,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         if (waitForJobsToDrain) {
           try { await waitForJobsToDrain(); } catch { /* drain failures don't block our turn */ }
         }
-        // Promote the placeholder card(s) — we're now actively calling OR.
+        // Promote the placeholder card(s) — connecting to OpenRouter.
+        // Stage gets refined as the OR stream progresses (see onEvent below):
+        //   stageOpenRouterConnecting → stageOpenRouterStreaming → stageOpenRouterFinalizing
+        // so the user sees concrete progress instead of a single static label.
         if (updateTempSongForClick) {
-          tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageGeneratingTextOpenRouter' }));
+          tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageOpenRouterConnecting' }));
         }
         const ac = new AbortController();
         // Hard timeout — OpenRouter sometimes hangs (rate-limit, model
@@ -1583,7 +1586,21 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               durationSec: duration > 0 ? duration : undefined,
               thinking,
             },
-            { signal: ac.signal, onEvent: () => {} },
+            {
+              signal: ac.signal,
+              onEvent: (ev) => {
+                // Refine stage labels based on stream progress so the user
+                // sees concrete state transitions: firstChunk = response is
+                // arriving (model started generating), streamDone = stream
+                // closed and we're parsing the JSON / validating fields.
+                if (!updateTempSongForClick) return;
+                if (ev.type === 'firstChunk') {
+                  tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageOpenRouterStreaming' }));
+                } else if (ev.type === 'streamDone') {
+                  tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageOpenRouterFinalizing' }));
+                }
+              },
+            },
           );
         } catch (e: any) {
           if (e?.name === 'AbortError' || ac.signal.aborted) {
