@@ -158,7 +158,7 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
           <span className={`w-1.5 h-1.5 rounded-full ${orReady ? 'bg-green-500' : (orEnabled ? 'bg-yellow-500' : 'bg-zinc-700')}`}></span>
           <span className="text-[9px] text-zinc-600">OR</span>
         </span>
-        <span className={`text-[9px] truncate max-w-[120px] ${orReady ? 'text-green-500' : 'text-zinc-600'}`}>
+        <span className={`text-[9px] truncate max-w-[120px] ${orReady ? 'text-zinc-500' : 'text-zinc-600'}`}>
           {orReady ? orModelShort : (orEnabled ? 'no key/model' : 'off')}
         </span>
       </div>
