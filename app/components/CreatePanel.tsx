@@ -1777,6 +1777,35 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         getLrc,
         getScores: false,
         loraLoaded,
+        // Pollinations cover-gen config — must be threaded through Simple
+        // mode too. Without this, Простой+local-LM users who toggle the
+        // Pollinations panel ON get effectiveCustomMode=false (because
+        // !customMode && !(useOpenRouter && !activeLmModel)) and the
+        // backend's startCoverGen guard `pol?.enabled && pol.model && pol.prompt`
+        // fails (`pol` is undefined) → covers silently never generate.
+        // Use the keyword-based prompt fallback since Простой+local-LM has
+        // no LLM coverPrompt available (the local LM doesn't expose one).
+        pollinations: usePollinations ? (() => {
+          const polCfg = pollinationsStorage.getConfig();
+          return {
+            enabled: true,
+            apiKey: polCfg.apiKey,
+            model: polCfg.model,
+            width: polCfg.width,
+            height: polCfg.height,
+            seedMode: polCfg.seedMode,
+            enhance: polCfg.enhance,
+            nologo: polCfg.nologo,
+            safe: polCfg.safe,
+            prompt: buildCoverPrompt({
+              title: '',
+              caption: '',
+              topic: songDescription,
+              language: vocalLanguage,
+              instrumental,
+            }),
+          };
+        })() : { enabled: false },
       });
     }
 

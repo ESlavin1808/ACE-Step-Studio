@@ -870,7 +870,14 @@ function AppContent() {
     setSongs(prev => prev.filter(s => !tempIds.has(s.id)));
     setActiveJobCount(0);
     setIsGenerating(false);
-  }, [token]);
+    // Mirror cancelAllGenerations: wake parked pre-flight clicks and reset the
+    // visual click-pending counter. Without this, after Reset-all the FIFO
+    // chain stays parked forever and the next click hangs on
+    // waitForJobsToDrain → no LLM ever fires; the N/10 badge also gets stuck
+    // showing whatever pendingClickCount was at the moment of reset.
+    drainQueueWaiters();
+    setPendingClickCount(0);
+  }, [token, drainQueueWaiters]);
 
   // Refresh songs list (called when any job completes successfully)
   const refreshSongsList = useCallback(async () => {
