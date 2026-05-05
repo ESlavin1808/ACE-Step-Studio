@@ -6,7 +6,7 @@
  * songs.cover_url. Doing it browser-side would require a second round-trip
  * to upload bytes back for ID3 tagging.
  *
- * Endpoint: GET https://image.pollinations.ai/prompt/{URL_ENCODED_PROMPT}
+ * Endpoint: GET https://gen.pollinations.ai/image/{URL_ENCODED_PROMPT}
  *   query:  model, width, height, seed, nologo, enhance, safe
  *   header: Authorization: Bearer <pk_|sk_...>  (optional)
  *
