@@ -1487,12 +1487,15 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     }
   };
 
-  // Per-click LLM draft from pre-flight (used to populate effStyle/effLyrics/etc
-  // and the Pollinations cover prompt). null = pre-flight either didn't run
-  // (custom mode or local LM available) or failed (we'd have early-returned).
-  let perClickDraft: SongDraft | null = null;
-
   const handleGenerate = async () => {
+    // Per-click LLM draft from pre-flight (used to populate effStyle/effLyrics/etc
+    // and the Pollinations cover prompt). null = pre-flight either didn't run
+    // (custom mode or local LM available) or failed (we'd have early-returned).
+    // MUST be local to handleGenerate — declared at component-body scope, two
+    // overlapping clicks within the same render would share the variable and
+    // one would clobber the other's draft.
+    let perClickDraft: SongDraft | null = null;
+
     // INSTANT visual feedback — bump the N/10 counter synchronously so the
     // user sees the click registered before LLM pre-flight kicks in. Each
     // bulk variant is its own slot in the badge (bulkCount=10 → +10).
@@ -1644,7 +1647,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         randomSeed: randomSeed || i > 0,
         seed: jobSeed,
         thinking: !activeLmModel ? false : thinking,
-        openrouterModel: lastOpenRouterModelId,
+        // Read directly from llmStorage rather than relying on the
+        // `lastOpenRouterModelId` state — React state setters are async and
+        // the value set in the pre-flight chain may not be observable on the
+        // first click of a session by the time this synchronous closure
+        // captures it. The localStorage read is sync and always fresh.
+        openrouterModel: (useOpenRouter ? llmStorage.getOpenRouter().model : '') || lastOpenRouterModelId,
         // Pollinations cover-gen config — backend handles cover gen async on
         // queued→running transition (see app/server/src/routes/generate.ts).
         pollinations: usePollinations ? (() => {
