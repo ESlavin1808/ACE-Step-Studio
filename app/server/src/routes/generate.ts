@@ -22,7 +22,13 @@ import {
   resolvePythonPath,
 } from '../services/acestep.js';
 import { getStorageProvider } from '../services/storage/factory.js';
-import { tagMp3Buffer, fetchCoverImage } from '../services/id3-tagger.js';
+import { tagMp3Buffer, fetchCoverImage, type PollinationsCoverConfig } from '../services/id3-tagger.js';
+import {
+  startCoverGen,
+  consumeCoverState,
+  awaitCoverWithTimeout,
+  getCoverState,
+} from '../services/cover-jobs.js';
 
 const router = Router();
 
@@ -216,6 +222,24 @@ interface GenerateBody {
 
   // OpenRouter
   openrouterModel?: string;
+
+  // Pollinations.ai cover generation — opaque blob mirroring PollinationsCoverConfig
+  // (see app/server/src/services/id3-tagger.ts). When `enabled=true` and a model
+  // is set, the audio-gen pipeline routes the post-render cover fetch through
+  // Pollinations, persists the bytes to /audio/{userId}/covers/{songId}.jpg and
+  // writes that path into songs.cover_url.
+  pollinations?: {
+    enabled: boolean;
+    apiKey?: string;
+    model?: string;
+    width?: number;
+    height?: number;
+    seedMode?: 'song' | 'random';
+    enhance?: boolean;
+    nologo?: boolean;
+    safe?: boolean;
+    prompt?: string;
+  };
 }
 
 router.post('/upload-audio', authMiddleware, (req: AuthenticatedRequest, res: Response, next: Function) => {
@@ -347,6 +371,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       repaintStrength,
       ditModel,
       openrouterModel,
+      pollinations,
     } = req.body as GenerateBody;
 
     if (!customMode && !songDescription) {
@@ -432,6 +457,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       repaintStrength,
       ditModel,
       openrouterModel,
+      pollinations,
     };
 
     // Create job record in database
@@ -441,6 +467,12 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
        VALUES (?, ?, 'queued', ?, datetime('now'), datetime('now'))`,
       [localJobId, req.user!.id, JSON.stringify(params)]
     );
+
+    // NOTE: cover-gen is NOT kicked off here. It starts later in the status
+    // poller, in the moment the audio job transitions queued→running for
+    // THIS jobId. That keeps the user's "queue" mental model intact: a
+    // cancelled queued job never spends user money on Pollinations, and
+    // 10 queued clicks don't fire 10 simultaneous Pollinations calls.
 
     // Generation params logged
 
@@ -490,6 +522,34 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
       try {
         const aceStatus = await getJobStatus(job.acestep_task_id);
 
+        // queued → running transition: this is the moment to kick off the
+        // Pollinations cover gen for THIS jobId, so it runs in parallel with
+        // the audio render but ONLY for jobs that are actually in flight
+        // (not 10 queued-but-not-yet-started jobs at once).
+        if (
+          job.status !== 'running' &&
+          aceStatus.status === 'running' &&
+          !getCoverState(req.params.jobId)
+        ) {
+          const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+          const pol = params?.pollinations;
+          if (pol?.enabled && pol.model && pol.prompt) {
+            const polCfg: PollinationsCoverConfig = {
+              enabled: true,
+              apiKey: pol.apiKey || '',
+              model: pol.model,
+              width: pol.width ?? 1024,
+              height: pol.height ?? 1024,
+              seedMode: pol.seedMode ?? 'song',
+              enhance: pol.enhance ?? true,
+              nologo: pol.nologo ?? true,
+              safe: pol.safe ?? true,
+              prompt: pol.prompt,
+            };
+            startCoverGen(req.params.jobId, polCfg);
+          }
+        }
+
         if (aceStatus.status !== job.status) {
           // Use optimistic lock: only update if status hasn't changed (prevents duplicate song creation)
           let updateQuery = `UPDATE generation_jobs SET status = ?, updated_at = datetime('now')`;
@@ -517,6 +577,7 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
               return lower.endsWith('.mp3') || lower.endsWith('.flac') || lower.endsWith('.wav');
             });
             const localPaths: string[] = [];
+            const insertedSongIds: string[] = [];
             const storage = getStorageProvider();
 
             for (let i = 0; i < audioUrls.length; i++) {
@@ -530,23 +591,34 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                 let { buffer } = await downloadAudioToBuffer(audioUrl);
                 const ext = audioUrl.includes('.flac') ? '.flac' : '.mp3';
 
-                // Tag MP3 with ID3 metadata (title, artist, cover, lyrics)
+                // Tag MP3 with ID3 metadata (title, artist, fast picsum cover, lyrics).
+                // We DO NOT block the audio-gen flow on Pollinations cover gen —
+                // that can take 30-60s on cold path and would freeze the UI's
+                // "Создать" button. Instead:
+                //   1. Synchronously fetch a fast picsum cover for the ID3 tag
+                //      (so downloaded MP3 has a thumbnail).
+                //   2. After INSERT, kick off Pollinations cover gen in the
+                //      background and UPDATE songs.cover_url when ready.
                 if (ext === '.mp3') {
                   try {
-                    const cover = await fetchCoverImage(songId);
+                    // Fast path only — picsum, no Pollinations here.
+                    const fastCover = await fetchCoverImage(songId, undefined);
                     buffer = tagMp3Buffer(buffer, {
                       title: songTitle,
                       artist: req.user!.username || 'ACE-Step Studio',
                       genre: params.style?.split(',')[0]?.trim(),
                       lyrics: params.instrumental ? undefined : params.lyrics,
                       bpm: aceStatus.result.bpm || params.bpm,
-                      coverBuffer: cover?.buffer,
-                      coverMimeType: cover?.mimeType,
+                      coverBuffer: fastCover?.buffer,
+                      coverMimeType: fastCover?.mimeType,
                     });
                   } catch (tagErr) {
                     console.warn('ID3 tagging failed, saving without tags:', tagErr);
                   }
                 }
+                // cover_url is filled later by background Pollinations job
+                // (see "BACKGROUND COVER GEN" below). For now insert NULL.
+                const savedCoverUrl: string | null = null;
 
                 const storageKey = `${req.user!.id}/${songId}${ext}`;
                 await storage.upload(storageKey, buffer, `audio/${ext.slice(1)}`);
@@ -558,8 +630,8 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                 await pool.query(
                   `INSERT INTO songs (id, user_id, title, lyrics, style, caption, audio_url,
                                       duration, bpm, key_scale, time_signature, tags, is_public, generation_params,
-                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, openrouter_model, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, openrouter_model, cover_url, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
                   [
                     songId,
                     req.user!.id,
@@ -580,19 +652,23 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     aceStatus.result.generationTime || null,
                     trackLrc,
                     params.openrouterModel || null,
+                    savedCoverUrl,
                   ]
                 );
 
                 localPaths.push(storedPath);
+                insertedSongIds.push(songId);
               } catch (downloadError) {
                 console.error(`Failed to download audio ${i + 1}:`, downloadError);
-                // Still create song record with remote URL
+                // Still create song record with remote URL.
+                // Fallback path: we don't have a local MP3 to tag, so cover_url
+                // stays NULL — UI shows the seeded gradient.
                 const trackLrcFallback = aceStatus.result.lrcData?.[i] || null;
                 await pool.query(
                   `INSERT INTO songs (id, user_id, title, lyrics, style, caption, audio_url,
                                       duration, bpm, key_scale, time_signature, tags, is_public, generation_params,
-                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, openrouter_model, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, openrouter_model, cover_url, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
                   [
                     songId,
                     req.user!.id,
@@ -613,6 +689,7 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     aceStatus.result.generationTime || null,
                     trackLrcFallback,
                     params.openrouterModel || null,
+                    null,
                   ]
                 );
                 localPaths.push(audioUrl);
@@ -621,6 +698,47 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
 
             aceStatus.result.audioUrls = localPaths;
             cleanupJob(job.acestep_task_id);
+
+            // Pollinations cover attachment — pure fire-and-forget. The
+            // status response goes out immediately; cover_url is UPDATEed
+            // whenever the background Pollinations gen finishes, regardless
+            // of how slow it is. This guarantees audio-gen flow + the bulk
+            // queue NEVER wait on image gen.
+            const polEntry = getCoverState(req.params.jobId);
+            if (insertedSongIds.length > 0 && polEntry) {
+              const userId = req.user!.id;
+              const songIds = [...insertedSongIds];
+              const jobId = req.params.jobId;
+
+              const attachCover = async (cover: { buffer: Buffer; mimeType: 'image/jpeg' | 'image/png' }) => {
+                const coverExt = cover.mimeType === 'image/png' ? '.png' : '.jpg';
+                for (const sid of songIds) {
+                  try {
+                    const coverKey = `${userId}/covers/${sid}${coverExt}`;
+                    await storage.upload(coverKey, cover.buffer, cover.mimeType);
+                    const url = storage.getPublicUrl(coverKey);
+                    await pool.query('UPDATE songs SET cover_url = ?, updated_at = datetime(\'now\') WHERE id = ?', [url, sid]);
+                  } catch (e) {
+                    console.warn(`[cover] attach failed for song ${sid}:`, e);
+                  }
+                }
+              };
+
+              if (polEntry.state === 'ready') {
+                // Already done by the time audio finished — schedule to a
+                // microtask so we still don't add latency to this response.
+                Promise.resolve()
+                  .then(() => attachCover(polEntry))
+                  .finally(() => consumeCoverState(jobId));
+              } else if (polEntry.state === 'pending') {
+                polEntry.promise
+                  .then((result) => { if (result.state === 'ready') return attachCover(result); })
+                  .catch((e) => console.warn(`[cover] background attach failed for job ${jobId}:`, e))
+                  .finally(() => consumeCoverState(jobId));
+              } else {
+                consumeCoverState(jobId);
+              }
+            }
           }
         }
 

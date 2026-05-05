@@ -3,6 +3,7 @@ import { Library, Disc, Search, LogIn, LogOut, Sun, Moon, GraduationCap, Newspap
 import { View } from '../types';
 import { useI18n } from '../context/I18nContext';
 import { llmStorage } from '../services/llm/storage';
+import { pollinationsStorage } from '../services/pollinations/storage';
 
 interface SidebarProps {
   currentView: View;
@@ -55,6 +56,12 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
   const orCfg = orEnabled ? llmStorage.getOpenRouter() : null;
   const orReady = !!(orCfg && orCfg.apiKey && orCfg.model);
   const orModelShort = orReady ? (orCfg!.model.length > 24 ? orCfg!.model.split('/').pop()! : orCfg!.model) : '';
+
+  // Pollinations cover-gen status (independent of LLM provider).
+  const polEnabled = pollinationsStorage.getUsePollinations() === true;
+  const polCfg = polEnabled ? pollinationsStorage.getConfig() : null;
+  const polReady = !!(polCfg && polCfg.model);
+  const polModelShort = polReady ? (polCfg!.model.length > 18 ? polCfg!.model.slice(0, 15) + '…' : polCfg!.model) : '';
   void orTick; // re-renders only — values come straight from storage
 
   if (!isOpen) {
@@ -160,6 +167,17 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
         </span>
         <span className={`text-[9px] truncate max-w-[120px] ${orReady ? 'text-zinc-500' : 'text-zinc-600'}`}>
           {orReady ? orModelShort : (orEnabled ? 'no key/model' : 'off')}
+        </span>
+      </div>
+
+      {/* Pollinations cover generation status */}
+      <div className="flex items-center justify-between text-zinc-600" title={polReady ? `Pollinations ON · ${polCfg!.model}` : (polEnabled ? 'Pollinations ON, but model not picked' : 'Pollinations OFF')}>
+        <span className="flex items-center gap-1">
+          <span className={`w-1.5 h-1.5 rounded-full ${polReady ? 'bg-green-500' : (polEnabled ? 'bg-yellow-500' : 'bg-zinc-700')}`}></span>
+          <span className="text-[9px] text-zinc-600">IMG</span>
+        </span>
+        <span className={`text-[9px] truncate max-w-[120px] ${polReady ? 'text-zinc-500' : 'text-zinc-600'}`}>
+          {polReady ? polModelShort : (polEnabled ? 'no model' : 'off')}
         </span>
       </div>
 

@@ -10,9 +10,13 @@ import { EditableSlider } from './EditableSlider';
 import { UseOpenRouterToggle } from './UseOpenRouterToggle';
 import { LmProviderPanel } from './LmProviderPanel';
 import { GenerationStatusPanel } from './GenerationStatusPanel';
+import { UsePollinationsToggle } from './UsePollinationsToggle';
+import { PollinationsPanel } from './PollinationsPanel';
 import { useOpenRouterGeneration } from '../services/llm/useOpenRouterGeneration';
 import { llmStorage } from '../services/llm/storage';
 import type { SongDraft } from '../services/llm/types';
+import { pollinationsStorage } from '../services/pollinations/storage';
+import { buildCoverPrompt } from '../services/pollinations/prompts';
 
 interface ReferenceTrack {
   id: string;
@@ -224,6 +228,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     return stored ?? true;
   });
   const [lastOpenRouterModelId, setLastOpenRouterModelId] = useState<string | null>(null);
+
+  // Pollinations.ai cover generation — independent toggle, default OFF.
+  const [usePollinations, setUsePollinations] = useState<boolean>(() => {
+    return pollinationsStorage.getUsePollinations() ?? false;
+  });
+  useEffect(() => { pollinationsStorage.setUsePollinations(usePollinations); }, [usePollinations]);
 
   // LM Parameters (under Expert)
   const [showLmParams, setShowLmParams] = useState(false);
@@ -1537,6 +1547,29 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         seed: jobSeed,
         thinking: !activeLmModel ? false : thinking,
         openrouterModel: lastOpenRouterModelId,
+        // Pollinations cover-gen config — backend handles cover gen async on
+        // queued→running transition (see app/server/src/routes/generate.ts).
+        pollinations: usePollinations ? (() => {
+          const polCfg = pollinationsStorage.getConfig();
+          return {
+            enabled: true,
+            apiKey: polCfg.apiKey,
+            model: polCfg.model,
+            width: polCfg.width,
+            height: polCfg.height,
+            seedMode: polCfg.seedMode,
+            enhance: polCfg.enhance,
+            nologo: polCfg.nologo,
+            safe: polCfg.safe,
+            prompt: buildCoverPrompt({
+              title: effTitle,
+              caption: styleWithGender,
+              topic: songDescription,
+              language: vocalLanguage,
+              instrumental,
+            }),
+          };
+        })() : { enabled: false },
         enhance,
         audioFormat,
         inferMethod,

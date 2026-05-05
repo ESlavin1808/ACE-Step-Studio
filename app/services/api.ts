@@ -368,6 +368,25 @@ export interface GenerationParams {
   repaintStrength?: number;
 
   loraLoaded?: boolean;
+
+  // OpenRouter — model id used for the lyric/caption AI run (persisted on song row)
+  openrouterModel?: string | null;
+
+  // Pollinations.ai cover-generation config — opaque blob mirrored to backend.
+  // When `enabled: true` and a model is set, post-render cover fetch routes
+  // through Pollinations and the bytes are persisted to song.cover_url.
+  pollinations?: {
+    enabled: boolean;
+    apiKey?: string;
+    model?: string;
+    width?: number;
+    height?: number;
+    seedMode?: 'song' | 'random';
+    enhance?: boolean;
+    nologo?: boolean;
+    safe?: boolean;
+    prompt?: string;
+  };
 }
 
 export interface GenerationJob {

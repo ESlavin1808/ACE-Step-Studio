@@ -38,6 +38,14 @@ export interface SongDraft {
   keyScale: string;
   timeSignature: string;
   durationSec: number;
+  /**
+   * One-or-two-sentence English visual description of an album cover for THIS
+   * specific song. The LLM tailors it to the lyrics and mood. Used as the core
+   * Pollinations prompt — backend wraps it with "square music album cover
+   * artwork, … , no text" framing. Empty string is a valid value (the
+   * Pollinations layer falls back to a keyword-based default when it's empty).
+   */
+  coverPrompt: string;
 }
 
 // Provider config (persisted in localStorage)

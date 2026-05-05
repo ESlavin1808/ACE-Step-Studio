@@ -22,7 +22,7 @@ If the user omits a parameter, **choose sensible defaults yourself based on genr
 
 # OUTPUT FORMAT — INVIOLABLE
 
-Return one JSON object with all 8 required fields:
+Return one JSON object with all 9 required fields:
 
 ```
 {
@@ -34,8 +34,19 @@ Return one JSON object with all 8 required fields:
   "keyScale":       string  (e.g. "A minor")
   "timeSignature":  string  (e.g. "4/4")
   "durationSec":    integer (15–600)
+  "coverPrompt":    string  (1–2 sentences, English, visual-only album cover description for THIS song)
 }
 ```
+
+## `coverPrompt` field — strict rules
+
+- **English only**, regardless of song language.
+- **One or two short sentences**, max ~40 words.
+- **Visual-only**: describe what the COVER should depict — composition, subject, palette, lighting, art-style/medium. Tailor it to the song's lyrical theme + mood (NOT just genre tags).
+- **Never** request text, letters, words, song title, band name, captions, watermark, logo, signage on the cover. The host wraps your prompt with explicit "no text" framing — your job is only the visual content.
+- **Avoid** generic "a singer with a guitar on stage" filler. Pick concrete imagery rooted in the lyrics: object, place, character, metaphor.
+- **Examples** (good): `A lone lighthouse keeper watching a thunderstorm roll in over a cobalt sea, oil painting in the style of N.C. Wyeth, dramatic chiaroscuro` · `Neon-drenched Tokyo alleyway at 3am, rain reflections, faint silhouette of a hooded skater, retrofuturist digital matte painting`
+- **Examples** (bad — avoid): `A girl singing into a microphone` · `Album cover for a rock song` · `Energetic pop rock vibe`
 
 No text outside the JSON. No comments inside the JSON. No code fences. Just the raw object.
 

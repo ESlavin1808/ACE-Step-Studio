@@ -20,7 +20,7 @@ const SCHEMA = {
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['title', 'caption', 'lyrics', 'tags', 'bpm', 'keyScale', 'timeSignature', 'durationSec'],
+    required: ['title', 'caption', 'lyrics', 'tags', 'bpm', 'keyScale', 'timeSignature', 'durationSec', 'coverPrompt'],
     properties: {
       title: { type: 'string' },
       caption: { type: 'string' },
@@ -30,6 +30,7 @@ const SCHEMA = {
       keyScale: { type: 'string' },
       timeSignature: { type: 'string' },
       durationSec: { type: 'integer' },
+      coverPrompt: { type: 'string' },
     },
   },
 } as const;
