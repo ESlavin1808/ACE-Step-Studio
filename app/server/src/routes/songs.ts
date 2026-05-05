@@ -5,6 +5,7 @@ import multer from 'multer';
 import { pool } from '../db/pool.js';
 import { authMiddleware, optionalAuthMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
 import { getStorageProvider } from '../services/storage/factory.js';
+import { updateMp3Cover } from '../services/id3-tagger.js';
 
 // 10MB cap — Pollinations images at 2048×2048 jpeg are typically 200-600KB,
 // even PNG of the same dimensions stays comfortably under 5MB.
@@ -481,9 +482,10 @@ router.post('/:id/regen-cover', authMiddleware, (req: AuthenticatedRequest, res:
       return;
     }
     try {
-      // Verify ownership and grab the previous cover_url so we can clean up
-      // an orphaned file when the new upload uses a different extension.
-      const check = await pool.query('SELECT user_id, cover_url FROM songs WHERE id = $1', [req.params.id]);
+      // Verify ownership, grab the previous cover_url so we can clean up an
+      // orphaned file when the extension changes, and grab audio_url so we
+      // can also patch the embedded ID3 cover frame in the MP3 itself.
+      const check = await pool.query('SELECT user_id, cover_url, audio_url FROM songs WHERE id = $1', [req.params.id]);
       if (check.rows.length === 0) {
         res.status(404).json({ error: 'Song not found' });
         return;
@@ -537,6 +539,28 @@ router.post('/:id/regen-cover', authMiddleware, (req: AuthenticatedRequest, res:
         `UPDATE songs SET cover_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
         [coverUrl, req.params.id]
       );
+
+      // Embed the new cover into the MP3's ID3 frame too — that way users
+      // who download the file (or play it in any external music player)
+      // see the picture they picked, not the seeded picsum thumbnail the
+      // initial generation baked in. Best-effort: only the LocalStorage
+      // provider implements `read()`; remote providers (S3 etc.) omit it
+      // because the in-memory round-trip would be too expensive there. If
+      // anything fails (read, retag, or re-upload) we still return success
+      // because the DB cover_url is already updated → in-app UI cover works.
+      const audioUrl: string | null = check.rows[0].audio_url || null;
+      if (audioUrl && audioUrl.startsWith('/audio/') && audioUrl.toLowerCase().endsWith('.mp3') && typeof storage.read === 'function') {
+        try {
+          const audioKey = audioUrl.replace('/audio/', '');
+          const mp3Buffer: Buffer = await storage.read(audioKey);
+          const retagged = updateMp3Cover(mp3Buffer, req.file.buffer, req.file.mimetype);
+          await storage.upload(audioKey, retagged, 'audio/mpeg');
+        } catch (id3Err) {
+          // Non-fatal — DB cover_url already points at the new image, only
+          // the embedded thumbnail in the downloadable MP3 stays stale.
+          console.warn(`[regen-cover] ID3 cover update failed for ${audioUrl}:`, id3Err);
+        }
+      }
 
       res.json({ coverUrl });
     } catch (e) {

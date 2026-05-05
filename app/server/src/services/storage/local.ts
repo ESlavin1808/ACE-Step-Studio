@@ -1,4 +1,4 @@
-import { writeFile, unlink, stat, mkdir, copyFile } from 'fs/promises';
+import { writeFile, unlink, stat, mkdir, copyFile, readFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { StorageProvider } from './index.js';
@@ -58,5 +58,14 @@ export class LocalStorageProvider implements StorageProvider {
     const destPath = path.join(this.audioDir, destKey);
     await mkdir(path.dirname(destPath), { recursive: true });
     await copyFile(sourcePath, destPath);
+  }
+
+  /** Used by the manual cover-regen endpoint to retag the embedded MP3
+   *  ID3 cover frame in place. Local-only — S3 providers omit this so
+   *  callers fall back to leaving the embedded thumbnail stale rather
+   *  than paying a full audio download just to retag. */
+  async read(key: string): Promise<Buffer> {
+    const filepath = path.join(this.audioDir, key);
+    return readFile(filepath);
   }
 }

@@ -30,6 +30,43 @@ interface TagOptions {
 }
 
 /**
+ * Replace ONLY the cover-image frame on an already-tagged MP3 buffer,
+ * leaving title / artist / lyrics / bpm / etc. untouched. Used by the
+ * manual cover-regen endpoint so the user's new picture is embedded into
+ * the file (= shows up in any music player that reads ID3) without us
+ * having to re-derive every other tag from the songs row.
+ *
+ * NodeID3.update is the operation we want — it merges the supplied tags
+ * into the existing frames instead of clobbering everything like
+ * NodeID3.write does. If `update` ever silently fails (returns false) we
+ * fall back to `tagMp3Buffer` re-driving the full tag list from the songs
+ * row so the file is never left with a partial header.
+ */
+export function updateMp3Cover(
+  buffer: Buffer,
+  coverBuffer: Buffer,
+  coverMimeType: string,
+): Buffer {
+  const partial: NodeID3.Tags = {
+    image: {
+      mime: coverMimeType || 'image/jpeg',
+      type: { id: 3, name: 'front cover' },
+      description: 'Cover',
+      imageBuffer: coverBuffer,
+    },
+  };
+  const updated = NodeID3.update(partial, buffer) as Buffer | boolean;
+  // NodeID3.update is typed as Buffer in current @types/node-id3 but at
+  // runtime can still return `false` on failure (bad MP3 header etc.) —
+  // keep the runtime guard while satisfying the stricter TS type.
+  if (!updated || typeof updated === 'boolean') {
+    console.warn('[ID3] cover-only update failed, returning original buffer');
+    return buffer;
+  }
+  return updated;
+}
+
+/**
  * Write ID3v2 tags to an MP3 buffer. Returns tagged buffer.
  * For non-MP3 files, returns the original buffer unchanged.
  */
