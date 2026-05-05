@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Library, Disc, Search, LogIn, LogOut, Sun, Moon, GraduationCap, Newspaper, AudioLines, Wrench } from 'lucide-react';
 import { View } from '../types';
 import { useI18n } from '../context/I18nContext';
+import { llmStorage } from '../services/llm/storage';
 
 interface SidebarProps {
   currentView: View;
@@ -46,6 +47,15 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
   const modelShort = (info.activeModel || '').replace('acestep-v15-', '').replace('marcorez8/', '');
   const lmShort = (info.activeLmModel || '').replace('acestep-5Hz-lm-', '');
   const lmBackend = info.activeLmBackend || '';
+
+  // OpenRouter status — derive on each poll tick (cheap localStorage reads)
+  const [orTick, setOrTick] = useState(0);
+  useEffect(() => { const i = setInterval(() => setOrTick(t => t + 1), 3000); return () => clearInterval(i); }, []);
+  const orEnabled = llmStorage.getUseOpenRouter() === true;
+  const orCfg = orEnabled ? llmStorage.getOpenRouter() : null;
+  const orReady = !!(orCfg && orCfg.apiKey && orCfg.model);
+  const orModelShort = orReady ? (orCfg!.model.length > 24 ? orCfg!.model.split('/').pop()! : orCfg!.model) : '';
+  void orTick; // re-renders only — values come straight from storage
 
   if (!isOpen) {
     return (
@@ -140,6 +150,17 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
       <div className="flex items-center justify-between text-zinc-600">
         <span className="text-[9px] text-zinc-600">LM</span>
         <span className={`text-[9px] truncate ${lmShort ? 'text-zinc-500' : 'text-zinc-600'}`}>{lmShort ? `${lmShort}${lmBackend ? ` (${lmBackend})` : ''}` : 'off'}</span>
+      </div>
+
+      {/* OpenRouter status */}
+      <div className="flex items-center justify-between text-zinc-600" title={orReady ? `OpenRouter ON · ${orCfg!.model}` : (orEnabled ? 'OpenRouter ON, but key/model not set' : 'OpenRouter OFF')}>
+        <span className="flex items-center gap-1">
+          <span className={`w-1.5 h-1.5 rounded-full ${orReady ? 'bg-green-500' : (orEnabled ? 'bg-yellow-500' : 'bg-zinc-700')}`}></span>
+          <span className="text-[9px] text-zinc-600">OR</span>
+        </span>
+        <span className={`text-[9px] truncate max-w-[120px] ${orReady ? 'text-green-500' : 'text-zinc-600'}`}>
+          {orReady ? orModelShort : (orEnabled ? 'no key/model' : 'off')}
+        </span>
       </div>
 
       {/* VRAM optimizations */}
