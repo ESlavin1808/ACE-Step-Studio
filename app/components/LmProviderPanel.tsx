@@ -171,33 +171,37 @@ export const LmProviderPanel: React.FC = () => {
     return Number.isFinite(completion) && completion >= 10e-6; // ≥ $10 per 1M tokens
   };
 
-  // Renders the trait badges next to a model name. Order is fixed
-  // (FREE / FRONTIER / THINK / VISION) so the same model always looks the
-  // same regardless of which list it shows up in.
+  // Compact trait badges — kept tight (text-[8px], px-1) so they don't
+  // dominate the row. Order: FREE / FRONTIER / THINK / VISION.
+  const Badge: React.FC<{ tone: 'green' | 'amber' | 'purple' | 'sky'; title?: string; children: React.ReactNode }> = ({ tone, title, children }) => {
+    const toneClass = {
+      green:  'bg-green-500/15 text-green-700 dark:text-green-300 ring-green-500/30',
+      amber:  'bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-amber-500/30',
+      purple: 'bg-purple-500/15 text-purple-700 dark:text-purple-300 ring-purple-500/30',
+      sky:    'bg-sky-500/15 text-sky-700 dark:text-sky-300 ring-sky-500/30',
+    }[tone];
+    return (
+      <span title={title} className={`text-[8px] font-semibold uppercase tracking-wide px-1 py-0 rounded ring-1 ring-inset ${toneClass}`}>
+        {children}
+      </span>
+    );
+  };
   const renderBadges = (m: any) => (
     <>
-      {isFreeTier(m) && (
-        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-green-500/20 text-green-700 dark:bg-green-500/30 dark:text-green-300 border border-green-500/40">
-          FREE
-        </span>
-      )}
-      {isFrontier(m) && (
-        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:bg-amber-500/30 dark:text-amber-300 border border-amber-500/40" title="Frontier-tier pricing — top-end model from a major provider">
-          FRONTIER
-        </span>
-      )}
-      {hasReasoning(m) && (
-        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-700 dark:bg-purple-500/30 dark:text-purple-300 border border-purple-500/40" title="Supports reasoning / chain-of-thought output">
-          THINK
-        </span>
-      )}
-      {hasVision(m) && (
-        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-700 dark:bg-sky-500/30 dark:text-sky-300 border border-sky-500/40" title="Accepts image input (multimodal)">
-          VISION
-        </span>
-      )}
+      {isFreeTier(m)    && <Badge tone="green">FREE</Badge>}
+      {isFrontier(m)    && <Badge tone="amber" title="Frontier-tier pricing">FRONTIER</Badge>}
+      {hasReasoning(m)  && <Badge tone="purple" title="Reasoning model">THINK</Badge>}
+      {hasVision(m)     && <Badge tone="sky" title="Multimodal — accepts images">VISION</Badge>}
     </>
   );
+
+  // Strip noisy "(free)" / ":free" markers OpenRouter appends to model
+  // display names — we already show the FREE badge so the duplication
+  // adds visual clutter to every row.
+  const cleanName = (m: any): string => {
+    const s = (m?.name || m?.id || '') as string;
+    return s.replace(/\s*\(free\)\s*$/i, '').replace(/:free$/i, '').trim();
+  };
 
   // Effective values for textareas (default text rendered as initial value)
   const valueGen = cfg.systemPromptGenerate || DEFAULT_GENERATE_PROMPT;
@@ -288,30 +292,36 @@ export const LmProviderPanel: React.FC = () => {
         )}
         {modelPickerOpen && (
           <div className="mt-1 max-h-72 overflow-y-auto border border-zinc-200 dark:border-white/10 rounded bg-white dark:bg-zinc-900">
-            {/* Filter chips. Sticky to keep them visible while the user scrolls
-                through the (potentially 300+) full model list. Shows total
-                count in each tier so the user knows what's available. */}
-            <div className="sticky top-0 z-10 flex items-center gap-1 px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border-b border-zinc-200 dark:border-white/10">
+            {/* Filter chips — sticky during scroll. Compact form: count
+                lives inside the chip in muted parens, not on a second line.
+                Right-side counter shows current filter result count. */}
+            <div className="sticky top-0 z-10 flex items-center gap-1.5 px-2 py-1 bg-zinc-50/95 dark:bg-zinc-800/95 backdrop-blur-sm border-b border-zinc-200 dark:border-white/10">
               {([
-                ['all',  `${t('lmProvider.modelPicker.filterAll') || 'All'} (${sortedModels.length})`],
-                ['free', `${t('lmProvider.modelPicker.filterFree') || 'Free'} (${freeCount})`],
-                ['paid', `${t('lmProvider.modelPicker.filterPaid') || 'Paid'} (${paidCount})`],
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setModelFilter(key)}
-                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                    modelFilter === key
-                      ? 'bg-pink-600 border-pink-600 text-white'
-                      : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-white/10 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-white/5'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-              <span className="ml-auto text-[10px] text-zinc-500">
-                {filteredModels.length} {t('lmProvider.modelPicker.shown') || 'shown'}
+                ['all',  t('lmProvider.modelPicker.filterAll')  || 'All',  sortedModels.length],
+                ['free', t('lmProvider.modelPicker.filterFree') || 'Free', freeCount],
+                ['paid', t('lmProvider.modelPicker.filterPaid') || 'Paid', paidCount],
+              ] as const).map(([key, label, count]) => {
+                const active = modelFilter === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setModelFilter(key)}
+                    className={`text-[10px] leading-none px-2 py-1 rounded-full transition-colors ${
+                      active
+                        ? 'bg-pink-600 text-white'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/70 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    {label}
+                    <span className={`ml-1 ${active ? 'text-white/70' : 'text-zinc-500'}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+              <span className="ml-auto text-[10px] text-zinc-500 tabular-nums">
+                {filteredModels.length}
               </span>
             </div>
             {recentModels.length > 0 && (
@@ -324,16 +334,16 @@ export const LmProviderPanel: React.FC = () => {
                     key={`recent-${m.id}`}
                     onClick={() => selectModel(m.id)}
                     type="button"
-                    className="w-full text-left px-2 py-1 text-xs hover:bg-zinc-100 dark:hover:bg-white/5"
+                    className="w-full text-left px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-white/5 border-b border-zinc-100 dark:border-white/5 last:border-b-0"
                   >
-                    <div className="font-medium flex items-center gap-1.5 flex-wrap">
-                      <span className="truncate">{m.name || m.id}</span>
-                      {renderBadges(m)}
+                    <div className="font-medium flex items-center gap-1 min-w-0">
+                      <span className="truncate">{cleanName(m)}</span>
+                      <span className="flex items-center gap-1 flex-shrink-0">{renderBadges(m)}</span>
                     </div>
-                    <div className="text-[10px] text-zinc-500">
+                    <div className="text-[10px] text-zinc-500 truncate">
                       {isFreeTier(m)
-                        ? <>ctx {m.context_length || '?'} · <span className="text-green-600 dark:text-green-400">free</span></>
-                        : <>ctx {m.context_length || '?'} · in {formatPrice(m.pricing?.prompt)} · out {formatPrice(m.pricing?.completion)}</>
+                        ? <>ctx {m.context_length || '—'}</>
+                        : <>ctx {m.context_length || '—'} · in {formatPrice(m.pricing?.prompt)} · out {formatPrice(m.pricing?.completion)}</>
                       }
                     </div>
                   </button>
@@ -350,16 +360,16 @@ export const LmProviderPanel: React.FC = () => {
                     key={m.id}
                     onClick={() => selectModel(m.id)}
                     type="button"
-                    className="w-full text-left px-2 py-1 text-xs hover:bg-zinc-100 dark:hover:bg-white/5"
+                    className="w-full text-left px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-white/5 border-b border-zinc-100 dark:border-white/5 last:border-b-0"
                   >
-                    <div className="font-medium flex items-center gap-1.5 flex-wrap">
-                      <span className="truncate">{m.name || m.id}</span>
-                      {renderBadges(m)}
+                    <div className="font-medium flex items-center gap-1 min-w-0">
+                      <span className="truncate">{cleanName(m)}</span>
+                      <span className="flex items-center gap-1 flex-shrink-0">{renderBadges(m)}</span>
                     </div>
-                    <div className="text-[10px] text-zinc-500">
+                    <div className="text-[10px] text-zinc-500 truncate">
                       {isFreeTier(m)
-                        ? <>ctx {m.context_length || '?'} · <span className="text-green-600 dark:text-green-400">free</span></>
-                        : <>ctx {m.context_length || '?'} · in {formatPrice(m.pricing?.prompt)} · out {formatPrice(m.pricing?.completion)}</>
+                        ? <>ctx {m.context_length || '—'}</>
+                        : <>ctx {m.context_length || '—'} · in {formatPrice(m.pricing?.prompt)} · out {formatPrice(m.pricing?.completion)}</>
                       }
                     </div>
                   </button>
