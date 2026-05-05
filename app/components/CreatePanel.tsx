@@ -1485,15 +1485,21 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
 
   const handleGenerate = async () => {
     // INSTANT visual feedback — bump the N/10 counter synchronously so the
-    // user sees the click registered before LLM pre-flight kicks in.
-    incrementPendingClicks?.();
-    let pendingDecremented = false;
-    const releasePending = () => {
-      if (pendingDecremented) return;
-      pendingDecremented = true;
-      decrementPendingClicks?.();
+    // user sees the click registered before LLM pre-flight kicks in. Each
+    // bulk variant is its own slot in the badge (bulkCount=10 → +10).
+    // The pending counter is handed off to the active counter inside
+    // App.tsx after beginPollingJob registers each job — that keeps the
+    // total continuous and avoids the 1→0→1 blink between pre-flight and
+    // polling. Early-return / failure paths release the slot manually.
+    const slotsClaimed = bulkCount;
+    incrementPendingClicks?.(slotsClaimed);
+    let claimedSlotsRemaining = slotsClaimed;
+    const releaseClaimedSlots = () => {
+      if (claimedSlotsRemaining > 0) {
+        decrementPendingClicks?.(claimedSlotsRemaining);
+        claimedSlotsRemaining = 0;
+      }
     };
-    // Wrap the whole body so we ALWAYS release on error/early-return paths.
     try {
     // Simple mode + OpenRouter ON + no local LM = pre-flight: ask OR to expand
     // the user's description into caption/lyrics/metadata, fill the same fields
@@ -1508,7 +1514,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     // single-flight and would conflict with explicit AI-Generate buttons.
     // We spawn a fresh OpenRouterProvider per click instead.
     if (!customMode && useOpenRouter && !activeLmModel) {
-      if (!songDescription.trim()) return;
+      if (!songDescription.trim()) { releaseClaimedSlots(); return; }
       llmPreflightQueueRef.current = llmPreflightQueueRef.current.then(async () => {
         if (waitForJobsToDrain) {
           try { await waitForJobsToDrain(); } catch { /* drain failures don't block our turn */ }
@@ -1534,9 +1540,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
       });
       try {
         perClickDraft = await llmPreflightQueueRef.current;
-        if (!perClickDraft) return;
+        if (!perClickDraft) { releaseClaimedSlots(); return; }
       } catch (e) {
         console.error('[Simple+OR] queued pre-flight failed:', e);
+        releaseClaimedSlots();
         return;
       }
     }
@@ -1732,12 +1739,16 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     if (bulkCount > 1) {
       setBulkCount(1);
     }
-    } finally {
-      // Always release the pending-click counter, even on error/early-return.
-      // The real activeJobCount has by now been bumped by beginPollingJob
-      // (or, on failure, it just goes back to baseline).
-      releasePending();
+    } catch (e) {
+      // Hard failure inside handleGenerate (rare — pre-flight already has its
+      // own catch). Release every slot we claimed so the badge doesn't stick.
+      console.error('handleGenerate crashed:', e);
+      releaseClaimedSlots();
     }
+    // NOTE: success path does NOT release here. Each onGenerate call hands
+    // off a slot to the active counter inside App.tsx (decrementPendingClicks
+    // after beginPollingJob). Releasing here would cause a 1→0→1 blink while
+    // the POST is still in flight.
   };
 
   // Derived per-button active flags — combine local-LM in-flight booleans with

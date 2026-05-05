@@ -107,8 +107,8 @@ function AppContent() {
   // pre-flight completes. Decremented when the click hands off to a real
   // active job (beginPollingJob has registered it in activeJobsRef).
   const [pendingClickCount, setPendingClickCount] = useState(0);
-  const incrementPendingClicks = useCallback(() => setPendingClickCount(c => c + 1), []);
-  const decrementPendingClicks = useCallback(() => setPendingClickCount(c => Math.max(0, c - 1)), []);
+  const incrementPendingClicks = useCallback((n = 1) => setPendingClickCount(c => c + n), []);
+  const decrementPendingClicks = useCallback((n = 1) => setPendingClickCount(c => Math.max(0, c - n)), []);
 
   // Theme State
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -1091,10 +1091,16 @@ function AppContent() {
       setSongs(prev => prev.map(s => s.id === tempId ? { ...s, jobId: job.jobId } : s));
 
       beginPollingJob(job.jobId, tempId);
+      // Hand off the click counter to the active counter — keeps the UI badge
+      // continuous instead of blinking 1→0→1 between pre-flight and polling.
+      decrementPendingClicks(1);
 
     } catch (e) {
       console.error('Generation error:', e);
       setSongs(prev => prev.filter(s => s.id !== tempId));
+      // Failure path: release the pending click slot so the badge accurately
+      // reflects "nothing in flight" instead of being stuck.
+      decrementPendingClicks(1);
 
       // Only set isGenerating to false if no other jobs are running
       if (activeJobsRef.current.size === 0) {
