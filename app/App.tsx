@@ -140,8 +140,17 @@ function AppContent() {
   }, []);
 
   // Failure path — drop the placeholder so the user doesn't see a stuck "Queued…"
+  // BUT only if the card is still a placeholder (no `jobId` yet). Once App.tsx
+  // handleGenerate has POSTed and beginPollingJob set jobId on the song, the
+  // card represents a real running backend job — wiping it would leave the
+  // user with audio gen running invisibly. Skip in that case.
   const removeTempSongForClick = useCallback((tempId: string) => {
-    setSongs(prev => prev.filter(s => s.id !== tempId));
+    setSongs(prev => prev.filter(s => {
+      if (s.id !== tempId) return true;
+      // Promoted to active job → keep
+      if (s.jobId) return true;
+      return false;
+    }));
   }, []);
 
   // Theme State

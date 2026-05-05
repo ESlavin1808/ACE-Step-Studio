@@ -6,8 +6,8 @@
  *   idle (not in map)
  *     → kickoff()      ⇒ pending  (Promise inserted)
  *   pending
- *     → resolve         ⇒ ready    (PolImageResult)
- *     → reject/timeout  ⇒ failed   (CoverFailure)
+ *     → resolve         ⇒ ready    (CoverReady — locally defined below)
+ *     → reject/timeout  ⇒ failed   (CoverFailed — locally defined below)
  *
  * The map only holds active jobs; entries are deleted by the consumer
  * (status polling) once it has either persisted the cover or decided to

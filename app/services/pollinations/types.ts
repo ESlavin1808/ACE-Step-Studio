@@ -1,12 +1,13 @@
 // Domain types for the Pollinations.ai cover generation provider.
 // API reference: https://gen.pollinations.ai/docs (OpenAPI schema at /docs/open-api/generate-schema)
 //
-// Endpoint: GET https://image.pollinations.ai/prompt/{URL_ENCODED_PROMPT}
-//   query:  model, width, height, seed, nologo, enhance, safe, referrer
+// Endpoint: GET https://gen.pollinations.ai/image/{URL_ENCODED_PROMPT}
+//   query:  model, width, height, seed, nologo, enhance, safe
 //   header: Authorization: Bearer <pk_|sk_...>  (optional — anonymous tier works)
 //
-// /image/models  → string[]  (current live model ids)
-// /v1/models     → string[]  (alias)
+// gen.pollinations.ai/image/models  → object[] (full catalogue with auth)
+// (legacy image.pollinations.ai/models was abandoned — silently routed all
+//  models to `sana`; see app/services/pollinations/client.ts header.)
 
 /**
  * Persisted client config — lives in localStorage at acestep.pollinations.config.
@@ -54,19 +55,9 @@ export interface PolModelInfo {
   description?: string;
 }
 
-/** Raw bytes + content type — the unit of work for cover generation.
- *  Used by the server-side service that calls /prompt/{...} and feeds the
- *  buffer into both ID3 tag embedding and disk persistence. */
-export interface PolImageResult {
-  buffer: Uint8Array;
-  mimeType: 'image/jpeg' | 'image/png';
-  // The prompt the model actually saw, after our local enhancement (if any).
-  // Useful for logging / debugging — server may persist this for diagnostics.
-  effectivePrompt: string;
-  // The model that returned the image (may differ from cfg.model — Pollinations
-  // silently routes between models on its free tier, see EXIF metadata).
-  resolvedModel?: string;
-}
+// NOTE: a separate `PolGenResult` type lives in
+// app/server/src/services/pollinations.ts — it's the actual server-side
+// return shape. This client-side bundle no longer needs a duplicate type.
 
 /** Input shape for buildCoverPrompt — narrow subset of song meta. */
 export interface CoverPromptInput {
