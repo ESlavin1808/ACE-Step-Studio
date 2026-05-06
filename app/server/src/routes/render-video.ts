@@ -31,9 +31,13 @@ function findFfmpeg(): string {
     execSync('ffmpeg -version', { stdio: 'ignore' });
     return 'ffmpeg';
   } catch {
-    throw new Error(
-      'ffmpeg not found. Set FFMPEG_PATH env var, or place ffmpeg in <projectRoot>/ffmpeg/, or install it system-wide.'
-    );
+    // The single supported fix: re-run the installer / Update step. Both
+    // run.bat (portable) and the Pinokio launcher's install.js + update.js
+    // download ffmpeg.exe into <projectRoot>/ffmpeg/ which is what case (2)
+    // looks for. We deliberately do NOT auto-download from the running
+    // server — the network step belongs in the install/update flow where
+    // the user can see progress and retry on failure.
+    throw new Error('ffmpeg not found — re-run install/update');
   }
 }
 
