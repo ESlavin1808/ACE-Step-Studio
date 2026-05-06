@@ -34,30 +34,33 @@ async function downloadFfmpeg(): Promise<string> {
       const url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
       const tmpZip = path.join(os.tmpdir(), `ace-ffmpeg-${Date.now()}.zip`);
       const tmpExtract = path.join(os.tmpdir(), `ace-ffmpeg-extract-${Date.now()}`);
-      console.log('[ffmpeg] downloading', url);
-      const res = await fetch(url);
-      if (!res.ok || !res.body) throw new Error(`ffmpeg download failed: HTTP ${res.status}`);
-      // Stream to disk so we don't load 80+ MB into RAM.
-      await pipeline(res.body as any, createWriteStream(tmpZip));
-      await mkdir(tmpExtract, { recursive: true });
-      // PowerShell's Expand-Archive is shipped with every Windows install,
-      // no extra binary required. Fast enough for ~80 MB.
-      execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '${tmpZip}' -DestinationPath '${tmpExtract}' -Force"`, { stdio: 'inherit' });
-      // gyan.dev zip lays out as ffmpeg-X.Y-essentials_build/bin/ffmpeg.exe
-      const found = execSync(`powershell -NoProfile -Command "(Get-ChildItem -Path '${tmpExtract}' -Filter 'ffmpeg.exe' -Recurse | Select-Object -First 1).FullName"`, { encoding: 'utf-8' }).trim();
-      if (!found) throw new Error('ffmpeg.exe not found inside the downloaded archive');
-      const probeFound = execSync(`powershell -NoProfile -Command "(Get-ChildItem -Path '${tmpExtract}' -Filter 'ffprobe.exe' -Recurse | Select-Object -First 1).FullName"`, { encoding: 'utf-8' }).trim();
-      const exeData = await readFile(found);
-      await writeFile(FFMPEG_BIN, exeData);
-      if (probeFound) {
-        const probeData = await readFile(probeFound);
-        await writeFile(path.join(FFMPEG_DIR, 'ffprobe.exe'), probeData);
+      // try/finally so a partial failure (zip incomplete, no exe inside)
+      // doesn't leak ~80 MB of garbage into the user's TEMP forever.
+      try {
+        console.log('[ffmpeg] downloading', url);
+        const res = await fetch(url);
+        if (!res.ok || !res.body) throw new Error(`ffmpeg download failed: HTTP ${res.status}`);
+        // Stream to disk so we don't load 80+ MB into RAM.
+        await pipeline(res.body as any, createWriteStream(tmpZip));
+        await mkdir(tmpExtract, { recursive: true });
+        // PowerShell's Expand-Archive is shipped with every Windows install.
+        execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '${tmpZip}' -DestinationPath '${tmpExtract}' -Force"`, { stdio: 'inherit' });
+        const found = execSync(`powershell -NoProfile -Command "(Get-ChildItem -Path '${tmpExtract}' -Filter 'ffmpeg.exe' -Recurse | Select-Object -First 1).FullName"`, { encoding: 'utf-8' }).trim();
+        if (!found) throw new Error('ffmpeg.exe not found inside the downloaded archive');
+        const probeFound = execSync(`powershell -NoProfile -Command "(Get-ChildItem -Path '${tmpExtract}' -Filter 'ffprobe.exe' -Recurse | Select-Object -First 1).FullName"`, { encoding: 'utf-8' }).trim();
+        const exeData = await readFile(found);
+        await writeFile(FFMPEG_BIN, exeData);
+        if (probeFound) {
+          const probeData = await readFile(probeFound);
+          await writeFile(path.join(FFMPEG_DIR, 'ffprobe.exe'), probeData);
+        }
+        console.log('[ffmpeg] installed →', FFMPEG_BIN);
+        return FFMPEG_BIN;
+      } finally {
+        // Best-effort cleanup — runs on success AND on every error path.
+        await rm(tmpZip, { force: true }).catch(() => {});
+        await rm(tmpExtract, { recursive: true, force: true }).catch(() => {});
       }
-      // Best-effort cleanup; failures here aren't fatal.
-      await rm(tmpZip, { force: true });
-      await rm(tmpExtract, { recursive: true, force: true });
-      console.log('[ffmpeg] installed →', FFMPEG_BIN);
-      return FFMPEG_BIN;
     }
 
     if (platform === 'linux' && arch === 'x64') {
@@ -65,28 +68,31 @@ async function downloadFfmpeg(): Promise<string> {
       const url = 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz';
       const tmpTar = path.join(os.tmpdir(), `ace-ffmpeg-${Date.now()}.tar.xz`);
       const tmpExtract = path.join(os.tmpdir(), `ace-ffmpeg-extract-${Date.now()}`);
-      console.log('[ffmpeg] downloading', url);
-      const res = await fetch(url);
-      if (!res.ok || !res.body) throw new Error(`ffmpeg download failed: HTTP ${res.status}`);
-      await pipeline(res.body as any, createWriteStream(tmpTar));
-      await mkdir(tmpExtract, { recursive: true });
-      execSync(`tar -xf "${tmpTar}" -C "${tmpExtract}"`, { stdio: 'inherit' });
-      const found = execSync(`find "${tmpExtract}" -name ffmpeg -type f | head -1`, { encoding: 'utf-8' }).trim();
-      if (!found) throw new Error('ffmpeg not found inside the downloaded archive');
-      const probeFound = execSync(`find "${tmpExtract}" -name ffprobe -type f | head -1`, { encoding: 'utf-8' }).trim();
-      const data = await readFile(found);
-      await writeFile(FFMPEG_BIN, data);
-      await chmod(FFMPEG_BIN, 0o755);
-      if (probeFound) {
-        const probeData = await readFile(probeFound);
-        const probeDest = path.join(FFMPEG_DIR, 'ffprobe');
-        await writeFile(probeDest, probeData);
-        await chmod(probeDest, 0o755);
+      try {
+        console.log('[ffmpeg] downloading', url);
+        const res = await fetch(url);
+        if (!res.ok || !res.body) throw new Error(`ffmpeg download failed: HTTP ${res.status}`);
+        await pipeline(res.body as any, createWriteStream(tmpTar));
+        await mkdir(tmpExtract, { recursive: true });
+        execSync(`tar -xf "${tmpTar}" -C "${tmpExtract}"`, { stdio: 'inherit' });
+        const found = execSync(`find "${tmpExtract}" -name ffmpeg -type f | head -1`, { encoding: 'utf-8' }).trim();
+        if (!found) throw new Error('ffmpeg not found inside the downloaded archive');
+        const probeFound = execSync(`find "${tmpExtract}" -name ffprobe -type f | head -1`, { encoding: 'utf-8' }).trim();
+        const data = await readFile(found);
+        await writeFile(FFMPEG_BIN, data);
+        await chmod(FFMPEG_BIN, 0o755);
+        if (probeFound) {
+          const probeData = await readFile(probeFound);
+          const probeDest = path.join(FFMPEG_DIR, 'ffprobe');
+          await writeFile(probeDest, probeData);
+          await chmod(probeDest, 0o755);
+        }
+        console.log('[ffmpeg] installed →', FFMPEG_BIN);
+        return FFMPEG_BIN;
+      } finally {
+        await rm(tmpTar, { force: true }).catch(() => {});
+        await rm(tmpExtract, { recursive: true, force: true }).catch(() => {});
       }
-      await rm(tmpTar, { force: true });
-      await rm(tmpExtract, { recursive: true, force: true });
-      console.log('[ffmpeg] installed →', FFMPEG_BIN);
-      return FFMPEG_BIN;
     }
 
     // macOS, Linux ARM, etc — easier to ask the user to install via brew /
@@ -102,6 +108,12 @@ async function downloadFfmpeg(): Promise<string> {
 }
 
 async function findFfmpeg(): Promise<string> {
+  // Explicit override — any external orchestrator (Pinokio start.js, custom
+  // wrapper, dev workflow) can pin a specific ffmpeg by setting FFMPEG_PATH.
+  // Highest priority so it wins over both portable layout and PATH.
+  const envPath = process.env.FFMPEG_PATH;
+  if (envPath && existsSync(envPath)) return envPath;
+
   // Portable layout — populated by install.bat (run.bat path), the Pinokio
   // launcher's install.js/update.js, AND by downloadFfmpeg() below on first
   // render if neither got there first.
