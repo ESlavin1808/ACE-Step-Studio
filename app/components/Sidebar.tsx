@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Library, Disc, Search, LogIn, LogOut, Sun, Moon, GraduationCap, Newspaper, AudioLines, Wrench } from 'lucide-react';
 import { View } from '../types';
 import { useI18n } from '../context/I18nContext';
+import { llmStorage } from '../services/llm/storage';
+import { pollinationsStorage } from '../services/pollinations/storage';
 
 interface SidebarProps {
   currentView: View;
@@ -46,6 +48,21 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
   const modelShort = (info.activeModel || '').replace('acestep-v15-', '').replace('marcorez8/', '');
   const lmShort = (info.activeLmModel || '').replace('acestep-5Hz-lm-', '');
   const lmBackend = info.activeLmBackend || '';
+
+  // OpenRouter status — derive on each poll tick (cheap localStorage reads)
+  const [orTick, setOrTick] = useState(0);
+  useEffect(() => { const i = setInterval(() => setOrTick(t => t + 1), 3000); return () => clearInterval(i); }, []);
+  const orEnabled = llmStorage.getUseOpenRouter() === true;
+  const orCfg = orEnabled ? llmStorage.getOpenRouter() : null;
+  const orReady = !!(orCfg && orCfg.apiKey && orCfg.model);
+  const orModelShort = orReady ? (orCfg!.model.length > 24 ? orCfg!.model.split('/').pop()! : orCfg!.model) : '';
+
+  // Pollinations cover-gen status (independent of LLM provider).
+  const polEnabled = pollinationsStorage.getUsePollinations() === true;
+  const polCfg = polEnabled ? pollinationsStorage.getConfig() : null;
+  const polReady = !!(polCfg && polCfg.model);
+  const polModelShort = polReady ? (polCfg!.model.length > 18 ? polCfg!.model.slice(0, 15) + '…' : polCfg!.model) : '';
+  void orTick; // re-renders only — values come straight from storage
 
   if (!isOpen) {
     return (
@@ -136,10 +153,39 @@ const SystemWidget: React.FC<{ isOpen?: boolean }> = ({ isOpen }) => {
         <span className="truncate text-zinc-500">{modelShort || '—'}</span>
       </div>
 
-      {/* LM Model */}
-      <div className="flex items-center justify-between text-zinc-600">
-        <span className="text-[9px] text-zinc-600">LM</span>
-        <span className={`text-[9px] truncate ${lmShort ? 'text-zinc-500' : 'text-zinc-600'}`}>{lmShort ? `${lmShort}${lmBackend ? ` (${lmBackend})` : ''}` : 'off'}</span>
+      {/* LM Model — hidden entirely when OpenRouter is the active text
+          provider OR when no local LM is loaded (run-no-lm.bat). The OR
+          row right below already covers the "where text comes from" question
+          so showing 'LM: off' next to a green OR row is just noise. */}
+      {lmShort && !orReady && (
+        <div className="flex items-center justify-between text-zinc-600">
+          <span className="text-[9px] text-zinc-600">LM</span>
+          <span className="text-[9px] truncate text-zinc-500">
+            {`${lmShort}${lmBackend ? ` (${lmBackend})` : ''}`}
+          </span>
+        </div>
+      )}
+
+      {/* OpenRouter status */}
+      <div className="flex items-center justify-between text-zinc-600" title={orReady ? `OpenRouter ON · ${orCfg!.model}` : (orEnabled ? 'OpenRouter ON, but key/model not set' : 'OpenRouter OFF')}>
+        <span className="flex items-center gap-1">
+          <span className={`w-1.5 h-1.5 rounded-full ${orReady ? 'bg-green-500' : (orEnabled ? 'bg-yellow-500' : 'bg-zinc-700')}`}></span>
+          <span className="text-[9px] text-zinc-600">OR</span>
+        </span>
+        <span className={`text-[9px] truncate max-w-[120px] ${orReady ? 'text-zinc-500' : 'text-zinc-600'}`}>
+          {orReady ? orModelShort : (orEnabled ? 'no key/model' : 'off')}
+        </span>
+      </div>
+
+      {/* Pollinations cover generation status */}
+      <div className="flex items-center justify-between text-zinc-600" title={polReady ? `Pollinations ON · ${polCfg!.model}` : (polEnabled ? 'Pollinations ON, but model not picked' : 'Pollinations OFF')}>
+        <span className="flex items-center gap-1">
+          <span className={`w-1.5 h-1.5 rounded-full ${polReady ? 'bg-green-500' : (polEnabled ? 'bg-yellow-500' : 'bg-zinc-700')}`}></span>
+          <span className="text-[9px] text-zinc-600">IMG</span>
+        </span>
+        <span className={`text-[9px] truncate max-w-[120px] ${polReady ? 'text-zinc-500' : 'text-zinc-600'}`}>
+          {polReady ? polModelShort : (polEnabled ? 'no model' : 'off')}
+        </span>
       </div>
 
       {/* VRAM optimizations */}

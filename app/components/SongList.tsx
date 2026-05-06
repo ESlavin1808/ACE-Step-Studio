@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Song } from '../types';
-import { Play, MoreHorizontal, Heart, ThumbsDown, ListPlus, Pause, Search, Filter, Check, Globe, Lock, Loader2, ThumbsUp, Share2, Video, Info, Clock, Timer } from 'lucide-react';
+import { Play, MoreHorizontal, Heart, ThumbsDown, ListPlus, Pause, Search, Filter, Check, Globe, Lock, Loader2, ThumbsUp, Share2, Video, Info, Clock, Timer, ImagePlus } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
 import { SongDropdownMenu } from './SongDropdownMenu';
@@ -20,6 +20,7 @@ interface SongListProps {
     onToggleLike: (songId: string) => void;
     onAddToPlaylist: (song: Song) => void;
     onOpenVideo?: (song: Song) => void;
+    onOpenCoverRegen?: (song: Song) => void;
     onShowDetails?: (song: Song) => void;
     onNavigateToProfile?: (username: string) => void;
     onReusePrompt?: (song: Song) => void;
@@ -100,6 +101,7 @@ export const SongList: React.FC<SongListProps> = ({
     onToggleLike,
     onAddToPlaylist,
     onOpenVideo,
+    onOpenCoverRegen,
     onShowDetails,
     onNavigateToProfile,
     onReusePrompt,
@@ -413,6 +415,7 @@ export const SongList: React.FC<SongListProps> = ({
                                     onToggleLike={() => onToggleLike(item.song.id)}
                                     onAddToPlaylist={() => onAddToPlaylist(item.song)}
                                     onOpenVideo={() => onOpenVideo && onOpenVideo(item.song)}
+                                    onOpenCoverRegen={() => onOpenCoverRegen && onOpenCoverRegen(item.song)}
                                     onShowDetails={() => onShowDetails && onShowDetails(item.song)}
                                     onNavigateToProfile={onNavigateToProfile}
                                     onReusePrompt={() => onReusePrompt?.(item.song)}
@@ -420,8 +423,22 @@ export const SongList: React.FC<SongListProps> = ({
                                     onSongUpdate={onSongUpdate}
                                     onUseAsReference={() => onUseAsReference?.(item.song)}
                                     onCoverSong={() => onCoverSong?.(item.song)}
-                                    onCancelJob={item.song.isGenerating && item.song.jobId ? () => onCancelJob?.(item.song.jobId!) : undefined}
-                                    onResetJob={item.song.stage === 'cancelled' && item.song.jobId ? () => onResetJob?.(item.song.jobId!) : undefined}
+                                    // Cancel button is also available during pre-flight (placeholder
+                                    // card with no jobId yet) — pass `song.id` (= tempId) and the
+                                    // App.tsx handler routes to the registered AbortController.
+                                    onCancelJob={
+                                      item.song.isGenerating
+                                        ? () => onCancelJob?.(item.song.jobId || item.song.id)
+                                        : undefined
+                                    }
+                                    // Reset works for both real-job and pre-flight cancelled cards
+                                    // (pre-flight cancel sets stage='cancelled' too, no jobId needed
+                                    // — Reset just removes the placeholder).
+                                    onResetJob={
+                                      item.song.stage === 'cancelled'
+                                        ? () => onResetJob?.(item.song.jobId || item.song.id)
+                                        : undefined
+                                    }
                                 />
                             ) : (
                                 <UploadItem
@@ -468,6 +485,7 @@ interface SongItemProps {
     onToggleLike: () => void;
     onAddToPlaylist: () => void;
     onOpenVideo?: () => void;
+    onOpenCoverRegen?: () => void;
     onShowDetails?: () => void;
     onNavigateToProfile?: (username: string) => void;
     onReusePrompt?: () => void;
@@ -494,6 +512,7 @@ const SongItem: React.FC<SongItemProps> = ({
     onToggleLike,
     onAddToPlaylist,
     onOpenVideo,
+    onOpenCoverRegen,
     onShowDetails,
     onNavigateToProfile,
     onReusePrompt,
@@ -677,7 +696,18 @@ const SongItem: React.FC<SongItemProps> = ({
                                 {song.title || (song.isGenerating ? (song.queuePosition ? t('queued') || "Queued..." : (t(song.stage) || song.stage || t('creating') || "Creating...")) : t('untitled') || "Untitled")}
                             </h3>
                         )}
-                        <span className="inline-flex items-center justify-center text-[9px] font-bold text-white bg-gradient-to-r from-pink-500 to-purple-500 px-1.5 py-0.5 rounded-sm shadow-sm" title={`DiT: ${song.ditModel || '?'} | LM: ${song.lmModel || '?'} (${song.lmBackend || '?'})`}>
+                        <span
+                          className="inline-flex items-center justify-center text-[9px] font-bold text-white bg-gradient-to-r from-pink-500 to-purple-500 px-1.5 py-0.5 rounded-sm shadow-sm"
+                          title={[
+                            `DiT: ${song.ditModel || '?'}`,
+                            // Only show LM line when a real local model was used
+                            // for this track. With run-no-lm.bat or when text was
+                            // generated through OpenRouter, lmModel is empty/null
+                            // and "LM: ? (pt)" is just noise.
+                            song.lmModel ? `LM: ${song.lmModel} (${song.lmBackend || '?'})` : null,
+                            song.openrouterModel ? `Text: openrouter (${song.openrouterModel})` : null,
+                          ].filter(Boolean).join(' | ')}
+                        >
                             {getModelDisplayName(song.ditModel)}
                         </span>
                         {song.generationTime != null && song.generationTime > 0 && (
@@ -724,14 +754,10 @@ const SongItem: React.FC<SongItemProps> = ({
                                     }}
                                 />
                             </div>
-                            {onCancelJob && (
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); onCancelJob(); }}
-                                    className="text-[11px] text-zinc-500 hover:text-red-400 transition-colors mt-1"
-                                >
-                                    {t('cancelGeneration')}
-                                </button>
-                            )}
+                            {/* Cancel button removed here — there's already one rendered
+                                next to the stage label on the right side of the row, which
+                                stays in sync with the Reset state. Two buttons in a single
+                                card looked like an accidental duplicate. */}
                         </div>
                     )}
                 </div>
@@ -771,6 +797,19 @@ const SongItem: React.FC<SongItemProps> = ({
                         >
                             <Video size={16} />
                         </button>
+
+                        {/* Manual cover regeneration — opens CoverRegenModal where the user can
+                            pick a model + prompt and either generate via Pollinations or
+                            upload a custom image from disk. Only shown for owned songs. */}
+                        {isOwner && (
+                            <button
+                                className="p-2 rounded-full hover:bg-zinc-200 dark:hover:bg-white/5 text-zinc-400 hover:text-black dark:hover:text-white transition-colors"
+                                onClick={(e) => { e.stopPropagation(); if (onOpenCoverRegen) onOpenCoverRegen(); }}
+                                title={t('coverRegen.openTooltip') || 'Regenerate cover'}
+                            >
+                                <ImagePlus size={16} />
+                            </button>
+                        )}
 
                         <button
                             className="p-2 rounded-full hover:bg-zinc-200 dark:hover:bg-white/5 text-zinc-400 hover:text-black dark:hover:text-white transition-colors ml-auto"

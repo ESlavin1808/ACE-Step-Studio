@@ -112,6 +112,7 @@ export interface Song {
   lmBackend?: string;
   generationTime?: number;
   lrcContent?: string;
+  openrouterModel?: string;
   generation_params?: any;
 }
 
@@ -129,6 +130,7 @@ function transformSongs(songs: Song[]): Song[] {
       lmBackend: (song as any).lm_backend || (song as any).lmBackend,
       generationTime: (song as any).generation_time || (song as any).generationTime,
       lrcContent: (song as any).lrc_content || (song as any).lrcContent,
+      openrouterModel: (song as any).openrouter_model || (song as any).openrouterModel,
     };
   });
 }
@@ -163,6 +165,7 @@ export const songsApi = {
       lmBackend: s.lm_backend || s.lmBackend,
       generationTime: s.generation_time || s.generationTime,
       lrcContent: s.lrc_content || s.lrcContent,
+      openrouterModel: s.openrouter_model || s.openrouterModel,
     }};
   },
 
@@ -182,6 +185,7 @@ export const songsApi = {
         lmBackend: s.lm_backend || s.lmBackend,
         generationTime: s.generation_time || s.generationTime,
         lrcContent: s.lrc_content || s.lrcContent,
+        openrouterModel: s.openrouter_model || s.openrouterModel,
       }
     };
   },
@@ -225,6 +229,7 @@ export const songsApi = {
         lmBackend: s.lm_backend || s.lmBackend,
         generationTime: s.generation_time || s.generationTime,
         lrcContent: s.lrc_content || s.lrcContent,
+        openrouterModel: s.openrouter_model || s.openrouterModel,
         isGenerating: s.isGenerating,
         queuePosition: s.queuePosition,
         bpm: s.bpm,
@@ -247,6 +252,26 @@ export const songsApi = {
 
   togglePrivacy: (id: string, token: string): Promise<{ isPublic: boolean }> =>
     api(`/api/songs/${id}/privacy`, { method: 'PATCH', token }),
+
+  // Persist a manually picked cover image. The blob comes from the
+  // CoverRegenModal — we generate it client-side via gen.pollinations.ai and
+  // upload it to the same `${userId}/covers/${songId}.{ext}` path the
+  // auto-pipeline uses, replacing the previous file in place.
+  regenCover: async (id: string, blob: Blob, token: string): Promise<{ coverUrl: string }> => {
+    const fd = new FormData();
+    // Backend looks for the field name "cover" in coverUpload.single('cover').
+    fd.append('cover', blob);
+    const res = await fetch(`/api/songs/${id}/regen-cover`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`regen-cover failed ${res.status}: ${errText || res.statusText}`);
+    }
+    return res.json();
+  },
 
   trackPlay: (id: string, token?: string | null): Promise<{ viewCount: number }> =>
     api(`/api/songs/${id}/play`, { method: 'POST', token: token || undefined }),
@@ -363,6 +388,49 @@ export interface GenerationParams {
   repaintStrength?: number;
 
   loraLoaded?: boolean;
+
+  // DCW (Differential Correction in Wavelet domain) cluster — already on the
+  // wire today (frontend builds them, App.tsx whitelist forwards them); add
+  // them here so the casts in App.tsx can drop the `as any`.
+  dcwEnabled?: boolean;
+  dcwMode?: 'low' | 'high' | 'double' | 'pix';
+  dcwScaler?: number;
+  dcwHighScaler?: number;
+  dcwWavelet?: string;
+
+  // Retake / Flow-edit — same story.
+  retakeSeed?: number;
+  retakeVariance?: number;
+  flowEditMorph?: boolean;
+  flowEditSourceCaption?: string;
+  flowEditSourceLyrics?: string;
+  flowEditNMin?: number;
+  flowEditNMax?: number;
+  flowEditNAvg?: number;
+
+  // Pre-created placeholder card id from CreatePanel — App.tsx promotes the
+  // existing card instead of creating a duplicate. Underscore-prefixed since
+  // it's a UI tunnel, not an audio-gen knob.
+  _tempId?: string;
+
+  // OpenRouter — model id used for the lyric/caption AI run (persisted on song row)
+  openrouterModel?: string | null;
+
+  // Pollinations.ai cover-generation config — opaque blob mirrored to backend.
+  // When `enabled: true` and a model is set, post-render cover fetch routes
+  // through Pollinations and the bytes are persisted to song.cover_url.
+  pollinations?: {
+    enabled: boolean;
+    apiKey?: string;
+    model?: string;
+    width?: number;
+    height?: number;
+    seedMode?: 'song' | 'random';
+    enhance?: boolean;
+    nologo?: boolean;
+    safe?: boolean;
+    prompt?: string;
+  };
 }
 
 export interface GenerationJob {

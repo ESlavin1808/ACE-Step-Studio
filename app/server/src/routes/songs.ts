@@ -1,9 +1,25 @@
 import { Router, Response } from 'express';
 import { Readable } from 'node:stream';
 import { v4 as uuidv4 } from 'uuid';
+import multer from 'multer';
 import { pool } from '../db/pool.js';
 import { authMiddleware, optionalAuthMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
 import { getStorageProvider } from '../services/storage/factory.js';
+import { updateMp3Cover } from '../services/id3-tagger.js';
+
+// 10MB cap — Pollinations images at 2048×2048 jpeg are typically 200-600KB,
+// even PNG of the same dimensions stays comfortably under 5MB.
+const coverUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!/^image\/(jpeg|png|webp)$/.test(file.mimetype)) {
+      cb(new Error('Only JPEG/PNG/WEBP images are allowed'));
+      return;
+    }
+    cb(null, true);
+  },
+});
 
 const router = Router();
 
@@ -107,7 +123,7 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Response)
     const result = await pool.query(
       `SELECT s.id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
               s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.is_public, 
-              s.like_count, s.view_count, s.user_id, s.created_at, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content,
+              s.like_count, s.view_count, s.user_id, s.created_at, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content, s.openrouter_model,
               COALESCE(u.username, 'Anonymous') as creator
        FROM songs s
        LEFT JOIN users u ON s.user_id = u.id
@@ -137,7 +153,7 @@ router.get('/public/featured', optionalAuthMiddleware, async (_req: Authenticate
     const result = await pool.query(
       `SELECT s.id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
               s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.like_count, s.view_count, s.created_at, s.user_id,
-              COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time
+              COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.openrouter_model
        FROM songs s
        LEFT JOIN users u ON s.user_id = u.id
        ORDER BY RANDOM()
@@ -184,7 +200,7 @@ router.get('/public', optionalAuthMiddleware, async (req: AuthenticatedRequest, 
     const result = await pool.query(
       `SELECT s.id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
               s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.like_count, s.created_at,
-              COALESCE(u.username, 'Anonymous') as creator, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time
+              COALESCE(u.username, 'Anonymous') as creator, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.openrouter_model
        FROM songs s
        LEFT JOIN users u ON s.user_id = u.id
        WHERE s.is_public = true
@@ -213,7 +229,7 @@ router.get('/:id', optionalAuthMiddleware, async (req: AuthenticatedRequest, res
     const result = await pool.query(
       `SELECT s.id, s.user_id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
               s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.is_public, s.like_count, s.view_count, s.created_at,
-              COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time
+              COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.openrouter_model
        FROM songs s
        LEFT JOIN users u ON s.user_id = u.id
        WHERE s.id = $1`,
@@ -252,7 +268,7 @@ router.get('/:id/full', optionalAuthMiddleware, async (req: AuthenticatedRequest
       pool.query(
         `SELECT s.id, s.user_id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
                 s.duration, s.bpm, s.key_scale, s.time_signature, s.tags, s.is_public,
-                s.like_count, s.view_count, s.created_at, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content,
+                s.like_count, s.view_count, s.created_at, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content, s.openrouter_model,
                 COALESCE(u.username, 'Anonymous') as creator, u.avatar_url as creator_avatar
          FROM songs s
          LEFT JOIN users u ON s.user_id = u.id
@@ -449,6 +465,111 @@ router.delete('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Res
   }
 });
 
+// POST /:id/regen-cover — manually regenerate the cover image. Frontend uploads
+// the picked image (multipart field "cover") and we persist it to the same
+// storage path that the auto-pipeline uses, then UPDATE songs.cover_url.
+//
+// We deliberately reuse the auto-pipeline path so that downloads/exports keep
+// working unchanged — the only thing this endpoint does differently is that
+// the image is provided by the user instead of being generated by the
+// background cover-jobs pipeline.
+router.post('/:id/regen-cover', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  coverUpload.single('cover')(req, res, async (err: any) => {
+    if (err) {
+      const msg = err?.message || 'Upload failed';
+      const status = err?.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+      res.status(status).json({ error: msg });
+      return;
+    }
+    try {
+      // Verify ownership, grab the previous cover_url so we can clean up an
+      // orphaned file when the extension changes, and grab audio_url so we
+      // can also patch the embedded ID3 cover frame in the MP3 itself.
+      const check = await pool.query('SELECT user_id, cover_url, audio_url FROM songs WHERE id = $1', [req.params.id]);
+      if (check.rows.length === 0) {
+        res.status(404).json({ error: 'Song not found' });
+        return;
+      }
+      if (check.rows[0].user_id !== req.user!.id) {
+        res.status(403).json({ error: 'Access denied' });
+        return;
+      }
+      if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+        res.status(400).json({ error: 'Empty cover upload' });
+        return;
+      }
+
+      // Mirror the auto-pipeline path layout from app/server/src/routes/generate.ts
+      // (attachCover): `${userId}/covers/${songId}${ext}`. Storage.upload
+      // overwrites in place, so a re-generate with the SAME extension replaces
+      // the previous file atomically. Cross-extension uploads are handled
+      // explicitly below so we don't leak orphan files.
+      const ext = req.file.mimetype === 'image/png'
+        ? '.png'
+        : req.file.mimetype === 'image/webp'
+          ? '.webp'
+          : '.jpg';
+      const coverKey = `${req.user!.id}/covers/${req.params.id}${ext}`;
+      const storage = getStorageProvider();
+      await storage.upload(coverKey, req.file.buffer, req.file.mimetype);
+      const coverUrl = storage.getPublicUrl(coverKey);
+
+      // If the previous cover was a locally-stored file with a DIFFERENT
+      // extension (e.g. user uploads webp over an existing .jpg), the old
+      // file would otherwise stay orphaned on disk forever. Clean it up.
+      // We only touch local-storage paths (`/audio/*`); remote URLs are
+      // out of scope for this cleanup.
+      const prevUrl: string | null = check.rows[0].cover_url || null;
+      if (prevUrl && prevUrl.startsWith('/audio/') && !prevUrl.startsWith(coverUrl)) {
+        try {
+          const prevKey = prevUrl.replace('/audio/', '');
+          // Avoid deleting the file we just wrote (e.g. local provider may
+          // return an identical key when extension matches — already same path).
+          if (prevKey !== coverKey) {
+            await storage.delete(prevKey);
+          }
+        } catch (delErr) {
+          // Non-fatal — orphan file is a minor disk-space cost, not a
+          // correctness issue.
+          console.warn(`[regen-cover] failed to delete previous cover ${prevUrl}:`, delErr);
+        }
+      }
+
+      await pool.query(
+        `UPDATE songs SET cover_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [coverUrl, req.params.id]
+      );
+
+      // Embed the new cover into the MP3's ID3 frame too — that way users
+      // who download the file (or play it in any external music player)
+      // see the picture they picked, not the seeded picsum thumbnail the
+      // initial generation baked in. Best-effort: only the LocalStorage
+      // provider implements `read()`; remote providers (S3 etc.) omit it
+      // because the in-memory round-trip would be too expensive there. If
+      // anything fails (read, retag, or re-upload) we still return success
+      // because the DB cover_url is already updated → in-app UI cover works.
+      const audioUrl: string | null = check.rows[0].audio_url || null;
+      if (audioUrl && audioUrl.startsWith('/audio/') && audioUrl.toLowerCase().endsWith('.mp3') && typeof storage.read === 'function') {
+        try {
+          const audioKey = audioUrl.replace('/audio/', '');
+          const mp3Buffer: Buffer = await storage.read(audioKey);
+          const retagged = updateMp3Cover(mp3Buffer, req.file.buffer, req.file.mimetype);
+          await storage.upload(audioKey, retagged, 'audio/mpeg');
+        } catch (id3Err) {
+          // Non-fatal — DB cover_url already points at the new image, only
+          // the embedded thumbnail in the downloadable MP3 stays stale.
+          console.warn(`[regen-cover] ID3 cover update failed for ${audioUrl}:`, id3Err);
+        }
+      }
+
+      res.json({ coverUrl });
+    } catch (e) {
+      console.error('Regen cover error:', e);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+});
+
 // Like/unlike song
 router.post('/:id/like', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   const client = await pool.connect();
@@ -503,7 +624,7 @@ router.get('/liked/list', authMiddleware, async (req: AuthenticatedRequest, res:
     const result = await pool.query(
       `SELECT s.id, s.title, s.lyrics, s.style, s.cover_url, s.audio_url,
               s.duration, s.tags, s.like_count, s.created_at, s.is_public,
-              COALESCE(u.username, 'Anonymous') as creator, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time
+              COALESCE(u.username, 'Anonymous') as creator, s.generation_params, s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.openrouter_model
        FROM liked_songs ls
        JOIN songs s ON ls.song_id = s.id
        LEFT JOIN users u ON s.user_id = u.id

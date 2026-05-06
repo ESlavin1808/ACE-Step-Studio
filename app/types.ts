@@ -23,6 +23,7 @@ export interface Song {
   ditModel?: string;
   lmModel?: string;
   lmBackend?: string;
+  openrouterModel?: string | null;
   generationTime?: number;
   lrcContent?: string;
   bpm?: number;
@@ -145,6 +146,48 @@ export interface GenerationParams {
   latentRescale?: number;
   repaintMode?: 'conservative' | 'balanced' | 'aggressive';
   repaintStrength?: number;
+
+  // OpenRouter
+  openrouterModel?: string | null;
+
+  // DCW (Differential Correction in Wavelet domain) — present at runtime,
+  // typed here so the App.tsx whitelist can drop the `as any` casts.
+  dcwEnabled?: boolean;
+  dcwMode?: 'low' | 'high' | 'double' | 'pix';
+  dcwScaler?: number;
+  dcwHighScaler?: number;
+  dcwWavelet?: string;
+
+  // Retake / Flow-edit
+  retakeSeed?: number;
+  retakeVariance?: number;
+  flowEditMorph?: boolean;
+  flowEditSourceCaption?: string;
+  flowEditSourceLyrics?: string;
+  flowEditNMin?: number;
+  flowEditNMax?: number;
+  flowEditNAvg?: number;
+
+  // LoRA loaded flag
+  loraLoaded?: boolean;
+
+  // Pre-created placeholder card id from CreatePanel — App.tsx promotes the
+  // existing card instead of creating a duplicate.
+  _tempId?: string;
+
+  // Pollinations.ai cover-generation config — opaque blob mirrored to backend.
+  pollinations?: {
+    enabled: boolean;
+    apiKey?: string;
+    model?: string;
+    width?: number;
+    height?: number;
+    seedMode?: 'song' | 'random';
+    enhance?: boolean;
+    nologo?: boolean;
+    safe?: boolean;
+    prompt?: string;
+  };
 }
 
 export interface PlayerState {

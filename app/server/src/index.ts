@@ -57,12 +57,17 @@ app.use(helmet({
       fontSrc: ["'self'", 'https:', 'data:'],
       formAction: ["'self'"],
       frameAncestors: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'https:'],
+      // `blob:` is required for the cover-regen modal preview — generated
+      // images come back as Blob from gen.pollinations.ai and we render them
+      // via `<img src={URL.createObjectURL(blob)}>`. Without `blob:` here
+      // the preview shows as a broken image even though the bytes are fine
+      // (Save still works, but the user can't see what they're saving).
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
       objectSrc: ["'none'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdn.tailwindcss.com', 'https://esm.sh'],
       scriptSrcAttr: ["'none'"],
       styleSrc: ["'self'", 'https:', "'unsafe-inline'"],
-      connectSrc: ["'self'", 'https://esm.sh', 'http://localhost:*', 'ws://localhost:*'],
+      connectSrc: ["'self'", 'https://esm.sh', 'https://openrouter.ai', 'https://image.pollinations.ai', 'https://gen.pollinations.ai', 'http://localhost:*', 'ws://localhost:*'],
       upgradeInsecureRequests: [],
     },
   },
@@ -368,7 +373,7 @@ app.get('/api/search', async (req, res) => {
         `SELECT s.id, s.title, s.lyrics, s.style, s.caption, s.cover_url, s.audio_url,
                 s.duration, s.tags, s.like_count, s.view_count, s.is_public, s.created_at,
                 u.username as creator, u.avatar_url as creator_avatar,
-                s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content
+                s.dit_model, s.lm_model, s.lm_backend, s.generation_time, s.lrc_content, s.openrouter_model
          FROM songs s
          LEFT JOIN users u ON s.user_id = u.id
          WHERE s.is_public = 1

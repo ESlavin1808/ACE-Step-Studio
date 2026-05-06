@@ -22,7 +22,12 @@ import {
   resolvePythonPath,
 } from '../services/acestep.js';
 import { getStorageProvider } from '../services/storage/factory.js';
-import { tagMp3Buffer, fetchCoverImage } from '../services/id3-tagger.js';
+import { tagMp3Buffer, fetchCoverImage, updateMp3Cover, type PollinationsCoverConfig } from '../services/id3-tagger.js';
+import {
+  startCoverGen,
+  consumeCoverState,
+  getCoverState,
+} from '../services/cover-jobs.js';
 
 const router = Router();
 
@@ -128,6 +133,8 @@ interface GenerateBody {
 
   // Simple Mode
   songDescription?: string;
+  /** ACE-Step text prompt — alias of lyrics for custom mode. */
+  prompt?: string;
 
   // Custom Mode
   lyrics: string;
@@ -213,6 +220,43 @@ interface GenerateBody {
 
   // Model selection
   ditModel?: string;
+
+  // DCW / Retake / FlowEdit / lora — mirrored from frontend GenerationParams
+  dcwEnabled?: boolean;
+  dcwMode?: 'low' | 'high' | 'double' | 'pix';
+  dcwScaler?: number;
+  dcwHighScaler?: number;
+  dcwWavelet?: string;
+  retakeSeed?: number;
+  retakeVariance?: number;
+  flowEditMorph?: boolean;
+  flowEditSourceCaption?: string;
+  flowEditSourceLyrics?: string;
+  flowEditNMin?: number;
+  flowEditNMax?: number;
+  flowEditNAvg?: number;
+  loraLoaded?: boolean;
+
+  // OpenRouter
+  openrouterModel?: string;
+
+  // Pollinations.ai cover generation — opaque blob mirroring PollinationsCoverConfig
+  // (see app/server/src/services/id3-tagger.ts). When `enabled=true` and a model
+  // is set, the audio-gen pipeline routes the post-render cover fetch through
+  // Pollinations, persists the bytes to /audio/{userId}/covers/{songId}.jpg and
+  // writes that path into songs.cover_url.
+  pollinations?: {
+    enabled: boolean;
+    apiKey?: string;
+    model?: string;
+    width?: number;
+    height?: number;
+    seedMode?: 'song' | 'random';
+    enhance?: boolean;
+    nologo?: boolean;
+    safe?: boolean;
+    prompt?: string;
+  };
 }
 
 router.post('/upload-audio', authMiddleware, (req: AuthenticatedRequest, res: Response, next: Function) => {
@@ -274,6 +318,9 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
     const {
       customMode,
       songDescription,
+      // `prompt` is the ACE-Step text prompt — frontend sends it for custom mode
+      // (alias of lyrics). Was being silently dropped before.
+      prompt,
       lyrics,
       style,
       title,
@@ -343,6 +390,26 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       repaintMode,
       repaintStrength,
       ditModel,
+      openrouterModel,
+      pollinations,
+      // DCW / Retake / FlowEdit / lora — frontend has been forwarding these
+      // for a while, but the backend destructure was dropping them silently
+      // on the floor. Added so the persisted `params` blob actually mirrors
+      // what the user submitted (used by reuse-as-template, audit trails).
+      dcwEnabled,
+      dcwMode,
+      dcwScaler,
+      dcwHighScaler,
+      dcwWavelet,
+      retakeSeed,
+      retakeVariance,
+      flowEditMorph,
+      flowEditSourceCaption,
+      flowEditSourceLyrics,
+      flowEditNMin,
+      flowEditNMax,
+      flowEditNAvg,
+      loraLoaded,
     } = req.body as GenerateBody;
 
     if (!customMode && !songDescription) {
@@ -358,6 +425,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
     const params = {
       customMode,
       songDescription,
+      prompt,
       lyrics,
       style,
       title,
@@ -427,6 +495,23 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       repaintMode,
       repaintStrength,
       ditModel,
+      openrouterModel,
+      pollinations,
+      // mirror to persisted params blob
+      dcwEnabled,
+      dcwMode,
+      dcwScaler,
+      dcwHighScaler,
+      dcwWavelet,
+      retakeSeed,
+      retakeVariance,
+      flowEditMorph,
+      flowEditSourceCaption,
+      flowEditSourceLyrics,
+      flowEditNMin,
+      flowEditNMax,
+      flowEditNAvg,
+      loraLoaded,
     };
 
     // Create job record in database
@@ -436,6 +521,12 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
        VALUES (?, ?, 'queued', ?, datetime('now'), datetime('now'))`,
       [localJobId, req.user!.id, JSON.stringify(params)]
     );
+
+    // NOTE: cover-gen is NOT kicked off here. It starts later in the status
+    // poller, in the moment the audio job transitions queued→running for
+    // THIS jobId. That keeps the user's "queue" mental model intact: a
+    // cancelled queued job never spends user money on Pollinations, and
+    // 10 queued clicks don't fire 10 simultaneous Pollinations calls.
 
     // Generation params logged
 
@@ -485,6 +576,38 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
       try {
         const aceStatus = await getJobStatus(job.acestep_task_id);
 
+        // First time we see this job in flight — kick off Pollinations cover
+        // gen. ONLY on `running` (not `succeeded`): if we also fired on the
+        // `succeeded` status, then after `attachCover.finally` runs
+        // `consumeCoverState(jobId)` the entry is gone, and the next poll
+        // (still seeing `succeeded`) would re-fire a brand-new cover gen
+        // (= burns Pollinations quota + leaks bytes).
+        // The "missed transition" risk is bounded: ACE-Step turbo audio takes
+        // 30+s and we poll every 2s, so we'll always catch at least one
+        // `running` poll between queued and succeeded.
+        if (
+          aceStatus.status === 'running' &&
+          !getCoverState(req.params.jobId)
+        ) {
+          const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+          const pol = params?.pollinations;
+          if (pol?.enabled && pol.model && pol.prompt) {
+            const polCfg: PollinationsCoverConfig = {
+              enabled: true,
+              apiKey: pol.apiKey || '',
+              model: pol.model,
+              width: pol.width ?? 1024,
+              height: pol.height ?? 1024,
+              seedMode: pol.seedMode ?? 'song',
+              enhance: pol.enhance ?? true,
+              nologo: pol.nologo ?? true,
+              safe: pol.safe ?? true,
+              prompt: pol.prompt,
+            };
+            startCoverGen(req.params.jobId, polCfg);
+          }
+        }
+
         if (aceStatus.status !== job.status) {
           // Use optimistic lock: only update if status hasn't changed (prevents duplicate song creation)
           let updateQuery = `UPDATE generation_jobs SET status = ?, updated_at = datetime('now')`;
@@ -496,6 +619,10 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
           } else if (aceStatus.status === 'failed' && aceStatus.error) {
             updateQuery += `, error = ?`;
             updateParams.push(aceStatus.error);
+            // Audio gen failed (CUDA OOM, timeout, model error). The cover-jobs
+            // entry never gets consumed by the success-path attachCover, so
+            // drop it here to prevent a Map leak per failed job.
+            consumeCoverState(req.params.jobId);
           }
 
           updateQuery += ` WHERE id = ? AND status = ?`;
@@ -512,6 +639,7 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
               return lower.endsWith('.mp3') || lower.endsWith('.flac') || lower.endsWith('.wav');
             });
             const localPaths: string[] = [];
+            const insertedSongIds: string[] = [];
             const storage = getStorageProvider();
 
             for (let i = 0; i < audioUrls.length; i++) {
@@ -525,23 +653,34 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                 let { buffer } = await downloadAudioToBuffer(audioUrl);
                 const ext = audioUrl.includes('.flac') ? '.flac' : '.mp3';
 
-                // Tag MP3 with ID3 metadata (title, artist, cover, lyrics)
+                // Tag MP3 with ID3 metadata (title, artist, fast picsum cover, lyrics).
+                // We DO NOT block the audio-gen flow on Pollinations cover gen —
+                // that can take 30-60s on cold path and would freeze the UI's
+                // "Создать" button. Instead:
+                //   1. Synchronously fetch a fast picsum cover for the ID3 tag
+                //      (so downloaded MP3 has a thumbnail).
+                //   2. After INSERT, kick off Pollinations cover gen in the
+                //      background and UPDATE songs.cover_url when ready.
                 if (ext === '.mp3') {
                   try {
-                    const cover = await fetchCoverImage(songId);
+                    // Fast path only — picsum, no Pollinations here.
+                    const fastCover = await fetchCoverImage(songId, undefined);
                     buffer = tagMp3Buffer(buffer, {
                       title: songTitle,
                       artist: req.user!.username || 'ACE-Step Studio',
                       genre: params.style?.split(',')[0]?.trim(),
                       lyrics: params.instrumental ? undefined : params.lyrics,
                       bpm: aceStatus.result.bpm || params.bpm,
-                      coverBuffer: cover?.buffer,
-                      coverMimeType: cover?.mimeType,
+                      coverBuffer: fastCover?.buffer,
+                      coverMimeType: fastCover?.mimeType,
                     });
                   } catch (tagErr) {
                     console.warn('ID3 tagging failed, saving without tags:', tagErr);
                   }
                 }
+                // cover_url is filled later by background Pollinations job
+                // (see "BACKGROUND COVER GEN" below). For now insert NULL.
+                const savedCoverUrl: string | null = null;
 
                 const storageKey = `${req.user!.id}/${songId}${ext}`;
                 await storage.upload(storageKey, buffer, `audio/${ext.slice(1)}`);
@@ -553,8 +692,8 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                 await pool.query(
                   `INSERT INTO songs (id, user_id, title, lyrics, style, caption, audio_url,
                                       duration, bpm, key_scale, time_signature, tags, is_public, generation_params,
-                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, openrouter_model, cover_url, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
                   [
                     songId,
                     req.user!.id,
@@ -574,19 +713,24 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     activeLmBackend || params.lmBackend || null,
                     aceStatus.result.generationTime || null,
                     trackLrc,
+                    params.openrouterModel || null,
+                    savedCoverUrl,
                   ]
                 );
 
                 localPaths.push(storedPath);
+                insertedSongIds.push(songId);
               } catch (downloadError) {
                 console.error(`Failed to download audio ${i + 1}:`, downloadError);
-                // Still create song record with remote URL
+                // Still create song record with remote URL.
+                // Fallback path: we don't have a local MP3 to tag, so cover_url
+                // stays NULL — UI shows the seeded gradient.
                 const trackLrcFallback = aceStatus.result.lrcData?.[i] || null;
                 await pool.query(
                   `INSERT INTO songs (id, user_id, title, lyrics, style, caption, audio_url,
                                       duration, bpm, key_scale, time_signature, tags, is_public, generation_params,
-                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+                                      dit_model, lm_model, lm_backend, generation_time, lrc_content, openrouter_model, cover_url, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
                   [
                     songId,
                     req.user!.id,
@@ -606,14 +750,91 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     activeLmBackend || params.lmBackend || null,
                     aceStatus.result.generationTime || null,
                     trackLrcFallback,
+                    params.openrouterModel || null,
+                    null,
                   ]
                 );
                 localPaths.push(audioUrl);
+                // Track even fallback songs so the cover-attach loop can
+                // UPDATE their cover_url when Pollinations finishes
+                // (downloads can fail but the song row exists with the
+                // remote MP3 URL — covers still apply).
+                insertedSongIds.push(songId);
               }
             }
 
             aceStatus.result.audioUrls = localPaths;
             cleanupJob(job.acestep_task_id);
+
+            // Pollinations cover attachment — pure fire-and-forget. The
+            // status response goes out immediately; cover_url is UPDATEed
+            // whenever the background Pollinations gen finishes, regardless
+            // of how slow it is. This guarantees audio-gen flow + the bulk
+            // queue NEVER wait on image gen.
+            const polEntry = getCoverState(req.params.jobId);
+            if (insertedSongIds.length > 0 && polEntry) {
+              const userId = req.user!.id;
+              const songIds = [...insertedSongIds];
+              const jobId = req.params.jobId;
+
+              const attachCover = async (cover: { buffer: Buffer; mimeType: 'image/jpeg' | 'image/png' }) => {
+                const coverExt = cover.mimeType === 'image/png' ? '.png' : '.jpg';
+                for (const sid of songIds) {
+                  try {
+                    const coverKey = `${userId}/covers/${sid}${coverExt}`;
+                    await storage.upload(coverKey, cover.buffer, cover.mimeType);
+                    const url = storage.getPublicUrl(coverKey);
+                    // `WHERE cover_url IS NULL` — guard against the race where
+                    // the user opened the manual CoverRegenModal mid-generation
+                    // and saved their pick before the auto-pipeline Promise
+                    // resolved. The auto-pipeline must NOT overwrite a cover
+                    // the user explicitly chose. (Manual save is the intent;
+                    // auto fill is best-effort default.)
+                    const updateResult = await pool.query('UPDATE songs SET cover_url = ?, updated_at = datetime(\'now\') WHERE id = ? AND cover_url IS NULL', [url, sid]);
+
+                    // Also re-embed the new cover into the MP3's ID3 frame —
+                    // without this the downloaded MP3 keeps showing the
+                    // initial picsum thumbnail (baked in at generate.ts:668)
+                    // forever, even though songs.cover_url already points at
+                    // the Pollinations image. Skipped if (a) the manual modal
+                    // already won the cover_url race (rowCount=0), (b) audio
+                    // is remote-hosted, or (c) the storage provider has no
+                    // read() method — best-effort, never breaks audio gen.
+                    if (updateResult.rowCount > 0) {
+                      try {
+                        const audioRow = await pool.query(`SELECT audio_url FROM songs WHERE id = ?`, [sid]);
+                        const audioUrl: string | null = audioRow.rows?.[0]?.audio_url || null;
+                        if (audioUrl && audioUrl.startsWith('/audio/') && audioUrl.toLowerCase().endsWith('.mp3') && typeof storage.read === 'function') {
+                          const audioKey = audioUrl.replace('/audio/', '');
+                          const mp3Buffer: Buffer = await storage.read(audioKey);
+                          const retagged = updateMp3Cover(mp3Buffer, cover.buffer, cover.mimeType);
+                          await storage.upload(audioKey, retagged, 'audio/mpeg');
+                        }
+                      } catch (id3Err) {
+                        console.warn(`[cover] ID3 re-embed failed for song ${sid}:`, id3Err);
+                      }
+                    }
+                  } catch (e) {
+                    console.warn(`[cover] attach failed for song ${sid}:`, e);
+                  }
+                }
+              };
+
+              if (polEntry.state === 'ready') {
+                // Already done by the time audio finished — schedule to a
+                // microtask so we still don't add latency to this response.
+                Promise.resolve()
+                  .then(() => attachCover(polEntry))
+                  .finally(() => consumeCoverState(jobId));
+              } else if (polEntry.state === 'pending') {
+                polEntry.promise
+                  .then((result) => { if (result.state === 'ready') return attachCover(result); })
+                  .catch((e) => console.warn(`[cover] background attach failed for job ${jobId}:`, e))
+                  .finally(() => consumeCoverState(jobId));
+              } else {
+                consumeCoverState(jobId);
+              }
+            }
           }
         }
 
@@ -656,6 +877,11 @@ router.post('/cancel/:jobId', authMiddleware, async (req: AuthenticatedRequest, 
     // Cancel in the acestep queue
     const cancelled = cancelJob(jobId);
 
+    // Drop any in-flight cover-gen entry — without this the entry stays in the
+    // map forever (memory leak) and a stale Promise.then() may still write a
+    // cover_url for a song row that is now in `failed` state (or never INSERTed).
+    consumeCoverState(jobId);
+
     // Also update DB status
     await pool.query(
       `UPDATE generation_jobs SET status = 'failed', error = 'Cancelled by user', updated_at = datetime('now')
@@ -676,6 +902,15 @@ router.post('/cancel-all', authMiddleware, async (req: AuthenticatedRequest, res
     // Cancel all in the acestep queue
     const count = cancelAllJobs();
 
+    // Drop in-flight cover-gen entries for this user's jobs so we don't leak
+    // map slots. Read pending/running jobs first so we know which keys to drop.
+    const inFlight = await pool.query(
+      `SELECT id FROM generation_jobs
+       WHERE user_id = ? AND status IN ('queued', 'running', 'pending')`,
+      [req.user!.id]
+    );
+    for (const row of inFlight.rows) consumeCoverState(row.id);
+
     // Also update DB
     const result = await pool.query(
       `UPDATE generation_jobs SET status = 'failed', error = 'Cancelled by user', updated_at = datetime('now')
@@ -695,6 +930,14 @@ router.post('/reset', authMiddleware, async (req: AuthenticatedRequest, res: Res
   try {
     // 1. Cancel all queued jobs
     cancelAllJobs();
+
+    // Drop in-flight cover-gen entries (same reason as /cancel-all)
+    const inFlight = await pool.query(
+      `SELECT id FROM generation_jobs
+       WHERE user_id = ? AND status IN ('queued', 'running', 'pending')`,
+      [req.user!.id]
+    );
+    for (const row of inFlight.rows) consumeCoverState(row.id);
 
     // 2. Update DB
     await pool.query(
@@ -899,8 +1142,8 @@ import('../services/pipeline-manager.js').then(({ pipelineManager }) => {
   pipelineManager.onRestart(() => {
     console.log('[Model] Pipeline restarted — resetting model state to defaults');
     activeLoadedModel = DEFAULT_MODEL;
-    activeLmModel = 'acestep-5Hz-lm-0.6B';
-    activeLmBackend = 'pt';
+    activeLmModel = process.env.INIT_LLM === 'false' ? '' : 'acestep-5Hz-lm-0.6B';
+    activeLmBackend = process.env.INIT_LLM === 'false' ? '' : 'pt';
     modelLoadingStatus = { state: 'idle', model: '' };
     generationInProgress = false;
   });

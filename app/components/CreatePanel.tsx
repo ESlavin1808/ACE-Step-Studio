@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Sparkles, ChevronDown, Settings2, Trash2, Music2, Sliders, Dices, Hash, RefreshCw, Plus, Upload, Play, Pause, Loader2, Disc3, Undo2, Wand2 } from 'lucide-react';
+import { Sparkles, ChevronDown, Settings2, Trash2, Music2, Sliders, Dices, Hash, RefreshCw, Plus, Upload, Play, Pause, Loader2, Disc3, Undo2, Wand2, Square } from 'lucide-react';
 import { AudioWaveform } from './AudioWaveform';
 import { GenerationParams, Song } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -7,6 +7,17 @@ import { useI18n } from '../context/I18nContext';
 import { generateApi, settingsApi } from '../services/api';
 import { MAIN_STYLES } from '../data/genres';
 import { EditableSlider } from './EditableSlider';
+import { UseOpenRouterToggle } from './UseOpenRouterToggle';
+import { LmProviderPanel } from './LmProviderPanel';
+import { GenerationStatusPanel } from './GenerationStatusPanel';
+import { UsePollinationsToggle } from './UsePollinationsToggle';
+import { PollinationsPanel } from './PollinationsPanel';
+import { useOpenRouterGeneration } from '../services/llm/useOpenRouterGeneration';
+import { OpenRouterProvider } from '../services/llm/openrouter';
+import { llmStorage } from '../services/llm/storage';
+import type { SongDraft } from '../services/llm/types';
+import { pollinationsStorage } from '../services/pollinations/storage';
+import { buildCoverPrompt } from '../services/pollinations/prompts';
 
 interface ReferenceTrack {
   id: string;
@@ -27,6 +38,28 @@ interface CreatePanelProps {
   createdSongs?: Song[];
   pendingAudioSelection?: { target: 'reference' | 'source'; url: string; title?: string } | null;
   onAudioSelectionApplied?: () => void;
+  /** Returns a promise that resolves when all currently-running generation
+   *  jobs have completed. Used to serialize bulk clicks: the next click's
+   *  LLM pre-flight + POST happen only after the previous track is fully
+   *  done (audio + cover). Resolves immediately when no jobs are active. */
+  waitForJobsToDrain?: () => Promise<void>;
+  /** Bump the parent's "pending click" counter synchronously the moment the
+   *  user clicks Создать, so the N/10 badge shows instantly even though
+   *  LLM pre-flight + POST will take seconds. */
+  incrementPendingClicks?: (n?: number) => void;
+  /** Decrement when the click has handed off to a real active job (or
+   *  failed) — pairs 1:1 with incrementPendingClicks. */
+  decrementPendingClicks?: (n?: number) => void;
+  /** Create an instant placeholder song card at click time. Returns the
+   *  temp id so the caller can pass it through onGenerate as `_tempId` and
+   *  reuse the same card instead of creating a duplicate. */
+  createTempSongForClick?: (descriptionPreview: string) => string;
+  updateTempSongForClick?: (tempId: string, patch: Partial<Song>) => void;
+  removeTempSongForClick?: (tempId: string) => void;
+  /** Register an AbortController for the in-flight OpenRouter pre-flight call
+   *  so the parent's cancel-button (single + cancel-all) can abort it. */
+  registerPreflightAbort?: (tempId: string, ac: AbortController) => void;
+  unregisterPreflightAbort?: (tempId: string) => void;
 }
 
 const KEY_SIGNATURES = [
@@ -119,6 +152,14 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   createdSongs = [],
   pendingAudioSelection,
   onAudioSelectionApplied,
+  waitForJobsToDrain,
+  incrementPendingClicks,
+  decrementPendingClicks,
+  createTempSongForClick,
+  updateTempSongForClick,
+  removeTempSongForClick,
+  registerPreflightAbort,
+  unregisterPreflightAbort,
 }) => {
   const { isAuthenticated, token, user } = useAuth();
   const { t } = useI18n();
@@ -199,7 +240,38 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [inferMethod, setInferMethod] = useState<'ode' | 'sde'>('ode');
   const [lmBackend, setLmBackend] = useState<'pt' | 'vllm'>('pt');
   const [lmModel, setLmModel] = useState('');
+  // Tracks the *actual* LM model loaded on the backend (server-reported, distinct
+  // from `lmModel` which represents the user-selected target). Empty string means
+  // no local LM is currently loaded.
+  const [activeLmModel, setActiveLmModel] = useState('');
+  // True after the first successful server poll — used to defer the default-ON
+  // toggle effect so we don't race against the initial render state.
+  const [serverPollSeen, setServerPollSeen] = useState<boolean>(false);
   const [shift, setShift] = useState(3.0);
+
+  // OpenRouter (LLM provider) integration
+  const [useOpenRouter, setUseOpenRouter] = useState<boolean>(() => {
+    const stored = llmStorage.getUseOpenRouter();
+    // Default ON when never set: in `run-no-lm.bat` the local LM is unavailable
+    // so the AI buttons must route through OpenRouter to do anything at all.
+    // Users on `run.bat` who want the local LM can flip the toggle off in one
+    // click; the choice is then persisted.
+    return stored ?? true;
+  });
+  const [lastOpenRouterModelId, setLastOpenRouterModelId] = useState<string | null>(null);
+
+  // Pollinations.ai cover generation — independent toggle, default OFF.
+  const [usePollinations, setUsePollinations] = useState<boolean>(() => {
+    return pollinationsStorage.getUsePollinations() ?? false;
+  });
+  useEffect(() => { pollinationsStorage.setUsePollinations(usePollinations); }, [usePollinations]);
+
+  // FIFO queue for OR pre-flight LLM calls — bulk clicks chain through this
+  // ref so the LLM hits one request at a time AND each click waits for the
+  // previous track's full completion (audio + cover) before its own LLM
+  // starts. The shared `orHook` singleton is reserved for explicit AI-buttons
+  // (Generate/Format) whose streaming UI demands a single source of truth.
+  const llmPreflightQueueRef = useRef<Promise<SongDraft | null>>(Promise.resolve(null));
 
   // LM Parameters (under Expert)
   const [showLmParams, setShowLmParams] = useState(false);
@@ -313,6 +385,19 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   React.useEffect(() => { localStorage.setItem('ace-style', style); }, [style]);
   React.useEffect(() => { localStorage.setItem('ace-title', title); }, [title]);
 
+  // OpenRouter: default toggle ON in no-LM mode (only if user hasn't explicitly set it).
+  // Gated on serverPollSeen so we don't race against the initial render —
+  // the initial activeLmModel='' is meaningless until the server has replied.
+  useEffect(() => {
+    if (!serverPollSeen) return;
+    if (llmStorage.getUseOpenRouter() === null && !activeLmModel) {
+      setUseOpenRouter(true);
+    }
+  }, [serverPollSeen, activeLmModel]);
+
+  // OpenRouter: persist toggle on every change
+  useEffect(() => { llmStorage.setUseOpenRouter(useOpenRouter); }, [useOpenRouter]);
+
   // Load settings on mount (once)
   const settingsLoadedOnceRef = useRef(false);
   React.useEffect(() => {
@@ -402,6 +487,12 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               if (data.activeLmModel) setLmModel(data.activeLmModel);
               if (data.activeLmBackend) setLmBackend(data.activeLmBackend);
             }
+            // Always track the *actual* loaded LM (independent of editing state).
+            // Empty string when backend reports no LM available.
+            setActiveLmModel(typeof data.activeLmModel === 'string' ? data.activeLmModel : '');
+            // Mark that at least one server poll has completed successfully so the
+            // default-ON toggle effect can evaluate against real server state.
+            setServerPollSeen(true);
           }
           // During loading, show the target model
           if (data.state === 'loading' && data.model) {
@@ -964,7 +1055,82 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [isGeneratingLyrics, setIsGeneratingLyrics] = useState(false);
   const [isGeneratingStyle, setIsGeneratingStyle] = useState(false);
 
+  // OpenRouter generation hook. Uses refs to thread the live activeOp/activePrimary
+  // into the onPartial callback (which captures values at first render otherwise).
+  const orActiveOpRef = useRef<'generate' | 'format' | null>(null);
+  const orActivePrimaryRef = useRef<'lyrics' | 'caption' | null>(null);
+  const bpmRef = useRef(bpm); bpmRef.current = bpm;
+  const durationRef = useRef(duration); durationRef.current = duration;
+  const keyScaleRef = useRef(keyScale); keyScaleRef.current = keyScale;
+  const timeSignatureRef = useRef(timeSignature); timeSignatureRef.current = timeSignature;
+  // Refs the simple-mode→OR pre-flight reads after `await` to avoid stale
+  // closure on the captured React state (which reflects the click moment,
+  // not the post-streaming filled values).
+  const styleRef = useRef(style); styleRef.current = style;
+  const lyricsTextRef = useRef(lyrics); lyricsTextRef.current = lyrics;
+  const titleRef = useRef(title); titleRef.current = title;
+
+  const orHook = useOpenRouterGeneration({
+    onPartial: (partial, openField) => {
+      const activeOp = orActiveOpRef.current;
+      const activePrimary = orActivePrimaryRef.current;
+
+      // Primary semantic fills
+      if (partial.caption && (activeOp === 'format' || activePrimary === 'caption')) {
+        setStyle(partial.caption);
+      }
+      if (partial.lyrics && (
+        activePrimary === 'lyrics' ||
+        (activeOp === 'format' && activePrimary === 'caption')
+      )) {
+        setLyrics(partial.lyrics);
+      }
+
+      // Live-stream the open string field char-by-char into its textarea
+      if (openField?.name === 'lyrics' && activePrimary === 'lyrics') {
+        setLyrics(openField.valueSoFar);
+      }
+      if (openField?.name === 'caption' && activePrimary === 'caption') {
+        setStyle(openField.valueSoFar);
+      }
+
+      // Aux fields: only-if-empty
+      if (partial.bpm && bpmRef.current === 0) setBpm(partial.bpm);
+      if (partial.durationSec && durationRef.current <= 0) setDuration(partial.durationSec);
+      if (partial.keyScale && !keyScaleRef.current) setKeyScale(partial.keyScale);
+      if (partial.timeSignature && !timeSignatureRef.current) {
+        const ts = String(partial.timeSignature);
+        setTimeSignature(ts.includes('/') ? ts : `${ts}/4`);
+      }
+    },
+    onFinal: (_draft: SongDraft) => {
+      setLastOpenRouterModelId(llmStorage.getOpenRouter().model);
+    },
+  });
+
+  // Keep refs in sync with the hook's published state. onPartial fires *during*
+  // a run, so we also set refs eagerly inside the run-dispatch branches below.
+  useEffect(() => {
+    orActiveOpRef.current = orHook.activeOp;
+    orActivePrimaryRef.current = orHook.activePrimary;
+  }, [orHook.activeOp, orHook.activePrimary]);
+
   const handleAiGenerate = async (target: 'style' | 'lyrics') => {
+    if (useOpenRouter) {
+      if (!style.trim()) return;
+      const primary = target === 'style' ? 'caption' : 'lyrics';
+      orActiveOpRef.current = 'generate';
+      orActivePrimaryRef.current = primary;
+      orHook.runGenerate({
+        topic: style,
+        primary,
+        language: vocalLanguage || 'en',
+        instrumental: target === 'style' ? instrumental : false,
+        durationSec: duration > 0 ? duration : undefined,
+        thinking,
+      });
+      return;
+    }
     if (!token || !style.trim()) return;
     if (target === 'lyrics') setIsGeneratingLyrics(true);
     else setIsGeneratingStyle(true);
@@ -999,6 +1165,26 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
 
   // Format/enhance existing content via LLM
   const handleFormat = async (target: 'style' | 'lyrics') => {
+    if (useOpenRouter) {
+      if (target === 'style' && !style.trim()) return;
+      if (target === 'lyrics' && !lyrics.trim()) return;
+      const primary = target === 'style' ? 'caption' : 'lyrics';
+      orActiveOpRef.current = 'format';
+      orActivePrimaryRef.current = primary;
+      orHook.runFormat({
+        caption: style,
+        lyrics,
+        bpm: bpm > 0 ? bpm : undefined,
+        durationSec: duration > 0 ? duration : undefined,
+        keyScale: keyScale || undefined,
+        timeSignature: timeSignature || undefined,
+        language: vocalLanguage || 'en',
+        instrumental: target === 'style' ? instrumental : false,
+        primary,
+        thinking,
+      });
+      return;
+    }
     if (!token) return;
     if (target === 'style' && !style.trim()) return;
     if (target === 'lyrics' && !lyrics.trim()) return;
@@ -1307,11 +1493,170 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     }
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
+    // Per-click LLM draft from pre-flight (used to populate effStyle/effLyrics/etc
+    // and the Pollinations cover prompt). null = pre-flight either didn't run
+    // (custom mode or local LM available) or failed (we'd have early-returned).
+    // MUST be local to handleGenerate — declared at component-body scope, two
+    // overlapping clicks within the same render would share the variable and
+    // one would clobber the other's draft.
+    let perClickDraft: SongDraft | null = null;
+
+    // INSTANT visual feedback — bump the N/10 counter synchronously so the
+    // user sees the click registered before LLM pre-flight kicks in. Each
+    // bulk variant is its own slot in the badge (bulkCount=10 → +10).
+    // The pending counter is handed off to the active counter inside
+    // App.tsx after beginPollingJob registers each job — that keeps the
+    // total continuous and avoids the 1→0→1 blink between pre-flight and
+    // polling. Early-return / failure paths release the slot manually.
+    const slotsClaimed = bulkCount;
+    incrementPendingClicks?.(slotsClaimed);
+    // Create a visible placeholder card per bulk variant — instant feedback.
+    const tempIds: string[] = [];
+    if (createTempSongForClick) {
+      const previewBase = (customMode ? (title || style || lyrics || 'Track') : (songDescription || 'Track')).slice(0, 60);
+      for (let i = 0; i < slotsClaimed; i++) {
+        const preview = slotsClaimed > 1 ? `${previewBase} (${i + 1})` : previewBase;
+        tempIds.push(createTempSongForClick(preview));
+      }
+    }
+    let claimedSlotsRemaining = slotsClaimed;
+    const releaseClaimedSlots = () => {
+      if (claimedSlotsRemaining > 0) {
+        decrementPendingClicks?.(claimedSlotsRemaining);
+        // Remove any placeholder cards that never got promoted to real jobs.
+        if (removeTempSongForClick) tempIds.forEach(id => removeTempSongForClick(id));
+        claimedSlotsRemaining = 0;
+      }
+    };
+    try {
+    // Simple mode + OpenRouter ON + no local LM = pre-flight: ask OR to expand
+    // the user's description into caption/lyrics/metadata, fill the same fields
+    // a Custom-mode submission would have, then proceed as Custom.
+    //
+    // SEQUENTIAL queue: bulk clicks chain through llmPreflightQueueRef. Each
+    // click also waits for waitForJobsToDrain() — the previous track's full
+    // pipeline (LLM + audio + cover) must be done before the next click's LLM
+    // even starts. This matches the user's "queue" mental model.
+    //
+    // CRITICAL: this MUST NOT use the shared `orHook` singleton — that hook is
+    // single-flight and would conflict with explicit AI-Generate buttons.
+    // We spawn a fresh OpenRouterProvider per click instead.
+    if (!customMode && useOpenRouter && !activeLmModel) {
+      if (!songDescription.trim()) { releaseClaimedSlots(); return; }
+      // CRITICAL: `.catch(() => null)` BEFORE `.then` is the chain firewall —
+      // it absorbs any rejection from the previous chain step so the FIFO
+      // ref stays usable. Without it, one bad pre-flight permanently rejects
+      // the chain and every future click inherits the rejection (LLM never
+      // runs until reload).
+      llmPreflightQueueRef.current = llmPreflightQueueRef.current.catch(() => null).then(async () => {
+        if (waitForJobsToDrain) {
+          try { await waitForJobsToDrain(); } catch { /* drain failures don't block our turn */ }
+        }
+        // Promote the placeholder card(s) — connecting to OpenRouter.
+        // Stage gets refined as the OR stream progresses (see onEvent below):
+        //   stageOpenRouterConnecting → stageOpenRouterStreaming → stageOpenRouterFinalizing
+        // so the user sees concrete progress instead of a single static label.
+        if (updateTempSongForClick) {
+          tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageOpenRouterConnecting' }));
+        }
+        const ac = new AbortController();
+        // Hard timeout — OpenRouter sometimes hangs (rate-limit, model
+        // outage, network drop) and the user is left with a stuck card
+        // and no way out. 90 s is generous for any thinking model + buffer
+        // for streaming response; longer than that means the call is
+        // effectively dead. AbortController.abort() drops the fetch and
+        // throws AbortError out of client.generate(), which we catch below.
+        const timeoutId = setTimeout(() => ac.abort(), 90_000);
+        // Register so the user-facing cancel button (SongList row + Cancel-all)
+        // can abort the in-flight HTTP request. We register against the FIRST
+        // tempId of the bulk batch — if the user cancels we abort the whole
+        // batch (Promise rejects → all tempIds get released together).
+        if (tempIds[0] && registerPreflightAbort) {
+          registerPreflightAbort(tempIds[0], ac);
+        }
+        try {
+          const client = new OpenRouterProvider();
+          return await client.generate(
+            {
+              topic: songDescription,
+              primary: 'lyrics',
+              language: vocalLanguage || 'en',
+              instrumental,
+              durationSec: duration > 0 ? duration : undefined,
+              thinking,
+            },
+            {
+              signal: ac.signal,
+              onEvent: (ev) => {
+                // Refine stage labels based on stream progress so the user
+                // sees concrete state transitions: firstChunk = response is
+                // arriving (model started generating), streamDone = stream
+                // closed and we're parsing the JSON / validating fields.
+                if (!updateTempSongForClick) return;
+                if (ev.type === 'firstChunk') {
+                  tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageOpenRouterStreaming' }));
+                } else if (ev.type === 'streamDone') {
+                  tempIds.forEach(id => updateTempSongForClick(id, { stage: 'stageOpenRouterFinalizing' }));
+                }
+              },
+            },
+          );
+        } catch (e: any) {
+          if (e?.name === 'AbortError' || ac.signal.aborted) {
+            // Either user-clicked-cancel or our 90 s timeout fired. Either
+            // way the chain step bails — the catch in the awaiting block
+            // below releases slots and removes the placeholder card.
+            console.warn('[Simple+OR] pre-flight aborted (cancel or timeout)');
+          } else {
+            console.error('[Simple+OR] pre-flight failed:', e);
+          }
+          return null;
+        } finally {
+          clearTimeout(timeoutId);
+          if (tempIds[0] && unregisterPreflightAbort) {
+            unregisterPreflightAbort(tempIds[0]);
+          }
+        }
+      });
+      try {
+        perClickDraft = await llmPreflightQueueRef.current;
+        if (!perClickDraft) { releaseClaimedSlots(); return; }
+        // Stamp the model id used for this song — `orHook` only updates this
+        // for the explicit AI buttons, not the Простой-mode pre-flight, so
+        // without this `params.openrouterModel` would always be null for
+        // Простой+OR generations and the song-row badge tooltip would be empty.
+        const orModelId = llmStorage.getOpenRouter().model;
+        if (orModelId) setLastOpenRouterModelId(orModelId);
+      } catch (e) {
+        console.error('[Simple+OR] queued pre-flight failed:', e);
+        releaseClaimedSlots();
+        return;
+      }
+    }
+
+    // After pre-flight we ALWAYS submit in customMode shape so the backend
+    // doesn't try to re-expand the description through a non-existent LM.
+    const effectiveCustomMode = customMode || (useOpenRouter && !activeLmModel);
+    // Prefer this-click's per-click draft (set by the OR pre-flight above).
+    // Fallback to refs (which reflect the LAST successful streamed gen).
+    // Final fallback to the React state values shown in the form.
+    const d = perClickDraft;
+    const effStyle = effectiveCustomMode && (d?.caption || styleRef.current) ? (d?.caption || styleRef.current) : style;
+    const effLyrics = effectiveCustomMode && (d?.lyrics || lyricsTextRef.current) ? (d?.lyrics || lyricsTextRef.current) : lyrics;
+    const effTitle = effectiveCustomMode && (d?.title || titleRef.current) ? (d?.title || titleRef.current) : title;
+    const effBpm = effectiveCustomMode && (d?.bpm || bpmRef.current) > 0 ? (d?.bpm || bpmRef.current) : bpm;
+    const effKeyScale = effectiveCustomMode && (d?.keyScale || keyScaleRef.current) ? (d?.keyScale || keyScaleRef.current) : keyScale;
+    const effTimeSig = effectiveCustomMode && (d?.timeSignature || timeSignatureRef.current) ? (d?.timeSignature || timeSignatureRef.current) : timeSignature;
+    const effDuration = effectiveCustomMode && (d?.durationSec || durationRef.current) > 0 ? (d?.durationSec || durationRef.current) : duration;
+    // LLM-tailored cover prompt for this exact song. Empty string falls
+    // through to the keyword-based default in buildCoverPrompt.
+    const effCoverPrompt = d?.coverPrompt || '';
+
     const styleWithGender = (() => {
-      if (!vocalGender) return style;
+      if (!vocalGender) return effStyle;
       const genderHint = vocalGender === 'male' ? 'Male vocals' : 'Female vocals';
-      const trimmed = style.trim();
+      const trimmed = effStyle.trim();
       return trimmed ? `${trimmed}\n${genderHint}` : genderHint;
     })();
 
@@ -1328,25 +1673,61 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
 
       // Simple mode: use only songDescription + safe defaults, ignore custom mode settings
       // Custom mode: use all user-configured parameters
-      onGenerate(customMode ? {
+      // Pass the pre-created placeholder tempId so App.tsx promotes it instead
+      // of creating a duplicate card.
+      const tempIdForThisJob = tempIds[i];
+      onGenerate(effectiveCustomMode ? {
+        _tempId: tempIdForThisJob,
         customMode: true,
-        prompt: lyrics,
-        lyrics,
+        prompt: effLyrics,
+        lyrics: effLyrics,
         style: styleWithGender,
-        title: bulkCount > 1 ? `${title} (${i + 1})` : title,
+        title: bulkCount > 1 ? `${effTitle} (${i + 1})` : effTitle,
         ditModel: selectedModel,
         instrumental,
         vocalLanguage,
-        bpm,
-        keyScale,
-        timeSignature,
-        duration,
+        bpm: effBpm,
+        keyScale: effKeyScale,
+        timeSignature: effTimeSig,
+        duration: effDuration,
         inferenceSteps,
         guidanceScale,
         batchSize,
         randomSeed: randomSeed || i > 0,
         seed: jobSeed,
-        thinking,
+        thinking: !activeLmModel ? false : thinking,
+        // Read directly from llmStorage rather than relying on the
+        // `lastOpenRouterModelId` state — React state setters are async and
+        // the value set in the pre-flight chain may not be observable on the
+        // first click of a session by the time this synchronous closure
+        // captures it. The localStorage read is sync and always fresh.
+        openrouterModel: (useOpenRouter ? llmStorage.getOpenRouter().model : '') || lastOpenRouterModelId,
+        // Pollinations cover-gen config — backend handles cover gen async on
+        // queued→running transition (see app/server/src/routes/generate.ts).
+        pollinations: usePollinations ? (() => {
+          const polCfg = pollinationsStorage.getConfig();
+          return {
+            enabled: true,
+            apiKey: polCfg.apiKey,
+            model: polCfg.model,
+            width: polCfg.width,
+            height: polCfg.height,
+            seedMode: polCfg.seedMode,
+            enhance: polCfg.enhance,
+            nologo: polCfg.nologo,
+            safe: polCfg.safe,
+            // Prefer the LLM-tailored cover prompt (visual sentences derived
+            // from the lyrics) when available; fall back to a keyword-based
+            // prompt assembled from caption/topic.
+            prompt: effCoverPrompt || buildCoverPrompt({
+              title: effTitle,
+              caption: styleWithGender,
+              topic: songDescription,
+              language: vocalLanguage,
+              instrumental,
+            }),
+          };
+        })() : { enabled: false },
         enhance,
         audioFormat,
         inferMethod,
@@ -1415,6 +1796,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         loraLoaded,
       } : {
         // Simple mode — isolated defaults, no custom mode bleed-through
+        _tempId: tempIdForThisJob,
         customMode: false,
         songDescription,
         prompt: songDescription,
@@ -1444,6 +1826,35 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         getLrc,
         getScores: false,
         loraLoaded,
+        // Pollinations cover-gen config — must be threaded through Simple
+        // mode too. Without this, Простой+local-LM users who toggle the
+        // Pollinations panel ON get effectiveCustomMode=false (because
+        // !customMode && !(useOpenRouter && !activeLmModel)) and the
+        // backend's startCoverGen guard `pol?.enabled && pol.model && pol.prompt`
+        // fails (`pol` is undefined) → covers silently never generate.
+        // Use the keyword-based prompt fallback since Простой+local-LM has
+        // no LLM coverPrompt available (the local LM doesn't expose one).
+        pollinations: usePollinations ? (() => {
+          const polCfg = pollinationsStorage.getConfig();
+          return {
+            enabled: true,
+            apiKey: polCfg.apiKey,
+            model: polCfg.model,
+            width: polCfg.width,
+            height: polCfg.height,
+            seedMode: polCfg.seedMode,
+            enhance: polCfg.enhance,
+            nologo: polCfg.nologo,
+            safe: polCfg.safe,
+            prompt: buildCoverPrompt({
+              title: '',
+              caption: '',
+              topic: songDescription,
+              language: vocalLanguage,
+              instrumental,
+            }),
+          };
+        })() : { enabled: false },
       });
     }
 
@@ -1454,7 +1865,26 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     if (bulkCount > 1) {
       setBulkCount(1);
     }
+    } catch (e) {
+      // Hard failure inside handleGenerate (rare — pre-flight already has its
+      // own catch). Release every slot we claimed so the badge doesn't stick.
+      console.error('handleGenerate crashed:', e);
+      releaseClaimedSlots();
+    }
+    // NOTE: success path does NOT release here. Each onGenerate call hands
+    // off a slot to the active counter inside App.tsx (decrementPendingClicks
+    // after beginPollingJob). Releasing here would cause a 1→0→1 blink while
+    // the POST is still in flight.
   };
+
+  // Derived per-button active flags — combine local-LM in-flight booleans with
+  // the OpenRouter hook's active op/primary so each button shows its own loader
+  // and others stay disabled while a run is in flight.
+  const isGenLyricsActive = isGeneratingLyrics || (orHook.activeOp === 'generate' && orHook.activePrimary === 'lyrics');
+  const isFmtLyricsActive = isFormattingLyrics || (orHook.activeOp === 'format' && orHook.activePrimary === 'lyrics');
+  const isGenStyleActive  = isGeneratingStyle  || (orHook.activeOp === 'generate' && orHook.activePrimary === 'caption');
+  const isFmtStyleActive  = isFormattingStyle  || (orHook.activeOp === 'format' && orHook.activePrimary === 'caption');
+  const orRunning = orHook.activeOp !== null;
 
   return (
     <div
@@ -1974,20 +2404,24 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                     <Trash2 size={14} />
                   </button>
                   <button
-                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isGeneratingLyrics ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
+                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isGenLyricsActive ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
                     title={t('aiGenerate') || 'Generate lyrics from scratch'}
-                    onClick={() => handleAiGenerate('lyrics')}
-                    disabled={isGeneratingLyrics || isFormattingLyrics || !style.trim()}
+                    onClick={useOpenRouter && isGenLyricsActive ? () => orHook.cancel() : () => handleAiGenerate('lyrics')}
+                    disabled={(isGenLyricsActive && !useOpenRouter) || isFmtLyricsActive || (orRunning && !isGenLyricsActive) || !style.trim()}
                   >
-                    {isGeneratingLyrics ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                    {useOpenRouter && isGenLyricsActive
+                      ? <Square size={14} />
+                      : (isGenLyricsActive ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />)}
                   </button>
                   <button
-                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isFormattingLyrics ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
+                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isFmtLyricsActive ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
                     title={t('aiFormat') || 'Enhance existing lyrics'}
-                    onClick={() => handleFormat('lyrics')}
-                    disabled={isFormattingLyrics || isGeneratingLyrics || !lyrics.trim()}
+                    onClick={useOpenRouter && isFmtLyricsActive ? () => orHook.cancel() : () => handleFormat('lyrics')}
+                    disabled={(isFmtLyricsActive && !useOpenRouter) || isGenLyricsActive || (orRunning && !isFmtLyricsActive) || !lyrics.trim()}
                   >
-                    {isFormattingLyrics ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    {useOpenRouter && isFmtLyricsActive
+                      ? <Square size={14} />
+                      : (isFmtLyricsActive ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />)}
                   </button>
                 </div>
               </div>
@@ -2094,20 +2528,24 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                     <Trash2 size={14} />
                   </button>
                   <button
-                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isGeneratingStyle ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
+                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isGenStyleActive ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
                     title={t('aiGenerate') || 'Generate style from scratch'}
-                    onClick={() => handleAiGenerate('style')}
-                    disabled={isGeneratingStyle || isFormattingStyle || !style.trim()}
+                    onClick={useOpenRouter && isGenStyleActive ? () => orHook.cancel() : () => handleAiGenerate('style')}
+                    disabled={(isGenStyleActive && !useOpenRouter) || isFmtStyleActive || (orRunning && !isGenStyleActive) || !style.trim()}
                   >
-                    {isGeneratingStyle ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                    {useOpenRouter && isGenStyleActive
+                      ? <Square size={14} />
+                      : (isGenStyleActive ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />)}
                   </button>
                   <button
-                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isFormattingStyle ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
+                    className={`p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors ${isFmtStyleActive ? 'text-pink-500' : 'text-zinc-500 hover:text-black dark:hover:text-white'}`}
                     title={t('aiFormat') || 'Enhance existing style'}
-                    onClick={() => handleFormat('style')}
-                    disabled={isFormattingStyle || isGeneratingStyle || !style.trim()}
+                    onClick={useOpenRouter && isFmtStyleActive ? () => orHook.cancel() : () => handleFormat('style')}
+                    disabled={(isFmtStyleActive && !useOpenRouter) || isGenStyleActive || (orRunning && !isFmtStyleActive) || !style.trim()}
                   >
-                    {isFormattingStyle ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    {useOpenRouter && isFmtStyleActive
+                      ? <Square size={14} />
+                      : (isFmtStyleActive ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />)}
                   </button>
                   <button
                     className="p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors text-zinc-500 hover:text-black dark:hover:text-white"
@@ -2139,6 +2577,14 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* OpenRouter generation status — shown when a remote LLM run is in flight or just finished */}
+            <GenerationStatusPanel
+              state={orHook.state}
+              onCancel={orHook.cancel}
+              onRetry={orHook.retry}
+              onDismiss={orHook.dismissError}
+            />
 
             {/* Title Input */}
             <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 overflow-hidden">
@@ -2749,37 +3195,48 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               </div>
             </div>
 
-            {/* LM Backend */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmBackendLabel') || 'LM Backend'}</label>
-              <select
-                value={lmBackend}
-                onChange={e => { setLmBackend(e.target.value as 'pt' | 'vllm'); lmEditingRef.current = true; }}
-                className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
-              >
-                <option value="vllm">{t('lmBackendVllm') || 'VLLM (~9.2 GB VRAM)'}</option>
-                <option value="pt">{t('lmBackendPt') || 'PT (~1.6 GB VRAM)'}</option>
-              </select>
-              <p className="text-[10px] text-zinc-500">{t('lmBackendHint') || 'vLLM uses CUDA graphs for faster LLM inference'}</p>
-            </div>
+            {/* OpenRouter toggle — selects between local LM and remote OpenRouter provider */}
+            <UseOpenRouterToggle value={useOpenRouter} onChange={setUseOpenRouter} />
 
-            {/* LM Model */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmModelLabel')}</label>
-              <select
-                value={lmModel}
-                onChange={(e) => { setLmModel(e.target.value); lmEditingRef.current = true; }}
-                className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
-              >
-                <option value="acestep-5Hz-lm-0.6B">{t('lmModel06B')}</option>
-                <option value="acestep-5Hz-lm-1.7B">{t('lmModel17B')}</option>
-                <option value="acestep-5Hz-lm-4B">{t('lmModel4B')}</option>
-              </select>
-              <p className="text-[10px] text-zinc-500">{t('lmModelHint')}</p>
-            </div>
+            {/* Local LM controls — hidden entirely when OpenRouter is active */}
+            {!useOpenRouter && (
+              <>
+                {/* LM Backend */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmBackendLabel') || 'LM Backend'}</label>
+                  <select
+                    value={lmBackend}
+                    onChange={e => { setLmBackend(e.target.value as 'pt' | 'vllm'); lmEditingRef.current = true; }}
+                    className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
+                  >
+                    <option value="vllm">{t('lmBackendVllm') || 'VLLM (~9.2 GB VRAM)'}</option>
+                    <option value="pt">{t('lmBackendPt') || 'PT (~1.6 GB VRAM)'}</option>
+                  </select>
+                  <p className="text-[10px] text-zinc-500">{t('lmBackendHint') || 'vLLM uses CUDA graphs for faster LLM inference'}</p>
+                </div>
 
-            {/* Apply LM Settings button */}
-            <button
+                {/* LM Model */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmModelLabel')}</label>
+                  <select
+                    value={lmModel}
+                    onChange={(e) => { setLmModel(e.target.value); lmEditingRef.current = true; }}
+                    className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
+                  >
+                    <option value="acestep-5Hz-lm-0.6B">{t('lmModel06B')}</option>
+                    <option value="acestep-5Hz-lm-1.7B">{t('lmModel17B')}</option>
+                    <option value="acestep-5Hz-lm-4B">{t('lmModel4B')}</option>
+                  </select>
+                  <p className="text-[10px] text-zinc-500">{t('lmModelHint')}</p>
+                </div>
+              </>
+            )}
+
+            {/* OpenRouter provider config — shown when toggle is ON */}
+            {useOpenRouter && <LmProviderPanel />}
+
+            {/* Apply LM Settings button — only relevant when controlling local LM */}
+            {!useOpenRouter && <button
               type="button"
               disabled={!!modelSwitchStatus || !lmModel}
               onClick={async () => {
@@ -2811,7 +3268,19 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               ) : (
                 t('applyLmSettings') || 'Apply LM Settings (restart pipeline)'
               )}
-            </button>
+            </button>}
+
+            {/* ───── Pollinations.ai cover generation ─────
+                Independent of the LLM provider above. When ON, after audio
+                renders, the server hits Pollinations to generate an album
+                cover and persists it to song.cover_url. */}
+            <div className="border-t border-zinc-200 dark:border-white/5 pt-2 mt-2">
+              <div className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-500 mb-1">
+                {t('pollinations.sectionTitle') || 'Cover image (Pollinations.ai)'}
+              </div>
+              <UsePollinationsToggle value={usePollinations} onChange={setUsePollinations} />
+              {usePollinations && <PollinationsPanel />}
+            </div>
 
             {/* Seed */}
             <div className="space-y-2">
@@ -2841,17 +3310,24 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               <p className="text-[10px] text-zinc-500">{randomSeed ? t('randomSeedRecommended') : t('fixedSeedReproducible')}</p>
             </div>
 
-            {/* Thinking Toggle */}
-            <div className="flex items-center justify-between py-2 border-t border-zinc-100 dark:border-white/5">
-              <span className={`text-xs font-medium ${loraLoaded ? 'text-zinc-400 dark:text-zinc-600' : 'text-zinc-600 dark:text-zinc-400'}`} title={t('hintThinkingCot') || 'Lets the lyric model reason about structure and metadata. Slightly slower.'}>{t('thinkingCot')}</span>
-              <button
-                onClick={() => !loraLoaded && setThinking(!thinking)}
-                disabled={loraLoaded}
-                className={`w-10 h-5 rounded-full flex items-center transition-colors duration-200 px-0.5 border border-zinc-200 dark:border-white/5 ${thinking ? 'bg-pink-600' : 'bg-zinc-300 dark:bg-black/40'} ${loraLoaded ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-              >
-                <div className={`w-4 h-4 rounded-full bg-white transform transition-transform duration-200 shadow-sm ${thinking ? 'translate-x-5' : 'translate-x-0'}`} />
-              </button>
-            </div>
+            {/* Thinking / Reasoning Toggle —
+                  • Local LM mode: enables chain-of-thought caption/lyrics generation.
+                  • OpenRouter mode: forwards reasoning hint to OR model (honored by reasoning models like Claude extended-thinking, GPT-5, DeepSeek-R1; ignored by others).
+            */}
+            {(useOpenRouter || activeLmModel !== '') && (
+              <div className="flex items-center justify-between py-2 border-t border-zinc-100 dark:border-white/5">
+                <span className={`text-xs font-medium ${loraLoaded ? 'text-zinc-400 dark:text-zinc-600' : 'text-zinc-600 dark:text-zinc-400'}`} title={useOpenRouter ? 'Forwards reasoning hint to OpenRouter (honored by reasoning-capable models, ignored by others).' : (t('hintThinkingCot') || 'Lets the lyric model reason about structure and metadata. Slightly slower.')}>
+                  {t('thinkingCot')}
+                </span>
+                <button
+                  onClick={() => !loraLoaded && setThinking(!thinking)}
+                  disabled={loraLoaded}
+                  className={`w-10 h-5 rounded-full flex items-center transition-colors duration-200 px-0.5 border border-zinc-200 dark:border-white/5 ${thinking ? 'bg-pink-600' : 'bg-zinc-300 dark:bg-black/40'} ${loraLoaded ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <div className={`w-4 h-4 rounded-full bg-white transform transition-transform duration-200 shadow-sm ${thinking ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+              </div>
+            )}
 
             {/* Shift */}
             <EditableSlider
@@ -2875,22 +3351,24 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               <div className="text-[11px] text-rose-500">{uploadError}</div>
             )}
 
-            {/* LM Parameters */}
-            <button
-              onClick={() => setShowLmParams(!showLmParams)}
-              className="w-full flex items-center justify-between px-4 py-3 bg-white/60 dark:bg-black/20 rounded-xl border border-zinc-200/70 dark:border-white/10 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <Music2 size={16} className="text-zinc-500" />
-                <div className="flex flex-col items-start">
-                  <span title={t('hintLmParameters') || 'Controls the 5Hz lyric/caption model sampling behavior.'}>{t('lmParameters')}</span>
-                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-normal">{t('controlLyricGeneration')}</span>
+            {/* LM Parameters — only relevant when a local LM is actually loaded */}
+            {!useOpenRouter && activeLmModel !== '' &&(
+              <button
+                onClick={() => setShowLmParams(!showLmParams)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-white/60 dark:bg-black/20 rounded-xl border border-zinc-200/70 dark:border-white/10 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Music2 size={16} className="text-zinc-500" />
+                  <div className="flex flex-col items-start">
+                    <span title={t('hintLmParameters') || 'Controls the 5Hz lyric/caption model sampling behavior.'}>{t('lmParameters')}</span>
+                    <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-normal">{t('controlLyricGeneration')}</span>
+                  </div>
                 </div>
-              </div>
-              <ChevronDown size={16} className={`text-zinc-500 transition-transform ${showLmParams ? 'rotate-180' : ''}`} />
-            </button>
+                <ChevronDown size={16} className={`text-zinc-500 transition-transform ${showLmParams ? 'rotate-180' : ''}`} />
+              </button>
+            )}
 
-            {showLmParams && (
+            {!useOpenRouter && activeLmModel !== '' &&showLmParams && (
               <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 p-4 space-y-4">
                 {/* LM Temperature */}
                 <EditableSlider

@@ -39,6 +39,12 @@ Built on [ACE-Step 1.5 XL](https://github.com/ace-step/ACE-Step-1.5) — the ope
 - **LoRA support** — load LoRA weights at inference time
 - **ID3 tags** — MP3 files include title, artist, cover art, lyrics, BPM
 
+### Cloud LLM & Image (optional, off by default)
+- **OpenRouter for lyrics & style** — bring-your-own-key alternative to the local LM. Pick any model (Claude, GPT-4o, DeepSeek, Llama 3.x, etc.), get instant lyrics + caption + key/BPM/duration metadata without using GPU VRAM. Local LM keeps working in parallel — toggle anytime.
+- **Pollinations.ai cover generation** — auto-generate album covers in parallel with audio (server-side, fire-and-forget, never blocks audio gen). The visual prompt comes straight from the OpenRouter LLM (which writes a 1–2 sentence visual description tailored to the song's lyrics and mood) or from a keyword fallback. Anonymous tier works; bring your own token for higher rate limits and no watermark.
+- **Manual cover regen modal** — picture-with-pencil button on every track. Pick any Pollinations model, write your own prompt, "Try again" until you like it, **or upload your own image from disk** (JPEG/PNG/WEBP, ≤10MB). Saved cover replaces both `songs.cover_url` and the embedded ID3 frame inside the MP3, so external players see your picked image too.
+- **Independent toggles** — every cloud feature is opt-in. Use only Pollinations covers + local LM, or only OpenRouter lyrics + auto-picsum covers, or both, or neither. Local-only mode is the default.
+
 ### Cover & Remix
 - **Cover mode** — transform existing audio into a new style while keeping the melody
 - **Repaint mode** — regenerate specific sections of a song (region selection on waveform)
@@ -150,6 +156,33 @@ Browser opens automatically at http://localhost:3001. Models download on first r
 | 4B | ~4 GB | Best |
 
 LM backend: **PT** (PyTorch, lighter) or **vLLM** (faster inference, more VRAM).
+
+## API Keys (optional)
+
+ACE-Step Studio is fully usable **without any API keys** — local DiT + local LM cover everything music-generation related. The keys below unlock optional cloud services that some users prefer for convenience or quality. They are stored in browser `localStorage` only, never sent to any server but the provider's own.
+
+> **TL;DR — both providers can be used 100 % free.**
+> OpenRouter has dozens of completely free models you can pick (DeepSeek R1 free, Llama 3.3 70B free, Gemini 2.0 Flash free, Qwen 2.5 free, Mistral Small free…) — just create a key and choose any model with a `:free` tag.
+> Pollinations.ai works **without any account at all** on the anonymous tier (slower, occasional watermark on some models) — leave the key field blank and it just works.
+
+| Provider | What it does in the app | Where to get it | Free tier |
+|---|---|---|---|
+| **OpenRouter** | Generates lyrics + caption + BPM/key/duration metadata + a visual cover prompt from your one-line description (replaces the local LM). Lets you pick Claude / GPT-4o / DeepSeek / Llama / Mistral / Gemini / any of 200+ models. | [openrouter.ai/keys](https://openrouter.ai/keys) — sign in with Google/GitHub, click *Create Key*. | **Yes — many fully free models** (filter the model picker by `:free`): DeepSeek R1 free, Llama 3.3 70B Instruct free, Gemini 2.0 Flash free, Qwen 2.5 free, Mistral Small 3 free, and more. Paid models are pay-per-token from your wallet — no monthly subscription required. |
+| **Pollinations.ai** | Generates the album cover image in parallel with audio gen, plus powers the manual cover-regen modal. Token also unlocks the full image-model catalogue (FLUX, Qwen-Image, Klein, GPT-Image, Z-Image, …) and removes the watermark. | [auth.pollinations.ai](https://auth.pollinations.ai) — sign in, copy `pk_…` (public) or `sk_…` (private) key. | **Yes — fully free**, anonymous tier works without any account or key. Slower (1 req/15 s) and may have a small watermark on certain models. With a free token: 1 req/5 s + no watermark + full model list. |
+
+### Where to enter them
+
+- **OpenRouter** → Create panel → Advanced → toggle *"Use OpenRouter"* → paste key, pick model, *Test*.
+- **Pollinations** → Create panel → Advanced → *Cover image (Pollinations.ai)* → toggle *"Generate covers via Pollinations.ai"* → paste key (optional), pick model, *Test*.
+
+Both toggles persist across sessions and are independent — turn either one off to fall back to the local pipeline (LM for lyrics, picsum for covers).
+
+### How private is this?
+
+- Keys live only in your browser's `localStorage` for this site.
+- They are sent **only** to `openrouter.ai` / `gen.pollinations.ai` over HTTPS, attached to that single API call. ACE-Step Studio does not have a backend account, telemetry, or proxy server.
+- Cover images you generate are written to `app/server/public/audio/<userId>/covers/<songId>.jpg` on your machine. Nothing is uploaded anywhere.
+- If you don't want any cloud calls, simply leave both toggles off — the entire app works offline.
 
 ## Architecture
 

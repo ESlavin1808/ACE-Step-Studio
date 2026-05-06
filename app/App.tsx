@@ -7,6 +7,7 @@ import { Player } from './components/Player';
 import { LibraryView } from './components/LibraryView';
 import { CreatePlaylistModal, AddToPlaylistModal } from './components/PlaylistModals';
 import { VideoGeneratorModal } from './components/VideoGeneratorModal';
+import { CoverRegenModal } from './components/CoverRegenModal';
 import { UsernameModal } from './components/UsernameModal';
 import { UserProfile } from './components/UserProfile';
 import { SettingsModal } from './components/SettingsModal';
@@ -84,6 +85,90 @@ function AppContent() {
   const activeJobsRef = useRef<Map<string, { tempId: string; pollInterval: ReturnType<typeof setInterval> }>>(new Map());
   const [activeJobCount, setActiveJobCount] = useState(0);
 
+  // FIFO drain barrier — handlers awaiting it block until the active-jobs
+  // queue is empty. Used by CreatePanel to chain LLM pre-flight calls behind
+  // the previous track's full completion (LLM + audio + cover) — that's the
+  // user's "queue" mental model: gen N+1 starts only after gen N is done.
+  const queueDrainResolversRef = useRef<Array<() => void>>([]);
+  const waitForJobsToDrain = useCallback((): Promise<void> => {
+    if (activeJobsRef.current.size === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      queueDrainResolversRef.current.push(resolve);
+    });
+  }, []);
+  const drainQueueWaiters = useCallback(() => {
+    if (activeJobsRef.current.size !== 0) return;
+    const waiters = queueDrainResolversRef.current;
+    queueDrainResolversRef.current = [];
+    waiters.forEach((r) => r());
+  }, []);
+
+  // "Pending click" counter — bumped synchronously the moment the user
+  // clicks Создать, so the button shows N/10 instantly even before the LLM
+  // pre-flight completes. Decremented when the click hands off to a real
+  // active job (beginPollingJob has registered it in activeJobsRef).
+  const [pendingClickCount, setPendingClickCount] = useState(0);
+  const incrementPendingClicks = useCallback((n = 1) => setPendingClickCount(c => c + n), []);
+
+  // Pre-flight AbortController registry, keyed by the placeholder card's
+  // tempId. CreatePanel registers a controller right before it starts the
+  // OpenRouter pre-flight call; the cancel buttons (single + cancel-all)
+  // pull from here to actually abort the in-flight HTTP request, otherwise
+  // the user's only escape is reloading the page (the Promise chain that
+  // park clicks via `waitForJobsToDrain` doesn't have an abort path of
+  // its own — see handoff "Open issue #1").
+  const preflightAbortersRef = useRef<Map<string, AbortController>>(new Map());
+  const registerPreflightAbort = useCallback((tempId: string, ac: AbortController) => {
+    preflightAbortersRef.current.set(tempId, ac);
+  }, []);
+  const unregisterPreflightAbort = useCallback((tempId: string) => {
+    preflightAbortersRef.current.delete(tempId);
+  }, []);
+  const decrementPendingClicks = useCallback((n = 1) => setPendingClickCount(c => Math.max(0, c - n)), []);
+
+  // Instant temp-song factory — called from CreatePanel at click time so the
+  // user sees a card in the list IMMEDIATELY, then it's promoted with real
+  // data when LLM pre-flight + POST complete. Returns the tempId so the
+  // caller can stash it on the eventual `onGenerate` payload (`_tempId`).
+  const createTempSongForClick = useCallback((descriptionPreview: string): string => {
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const tempSong: Song = {
+      id: tempId,
+      title: descriptionPreview.slice(0, 60) || (t('generating') || 'Generating…'),
+      lyrics: '',
+      style: '',
+      coverUrl: 'https://picsum.photos/200/200?blur=10',
+      duration: '--:--',
+      createdAt: new Date(),
+      isGenerating: true,
+      // Use the i18n key — SongList renders via t(song.stage) || song.stage.
+      stage: 'stageWaitingInQueue',
+      tags: ['queued'],
+      isPublic: true,
+    };
+    setSongs(prev => [tempSong, ...prev]);
+    return tempId;
+  }, [t]);
+
+  // Update placeholder fields as LLM streams data, e.g. style/lyrics.
+  const updateTempSongForClick = useCallback((tempId: string, patch: Partial<Song>) => {
+    setSongs(prev => prev.map(s => s.id === tempId ? { ...s, ...patch } : s));
+  }, []);
+
+  // Failure path — drop the placeholder so the user doesn't see a stuck "Queued…"
+  // BUT only if the card is still a placeholder (no `jobId` yet). Once App.tsx
+  // handleGenerate has POSTed and beginPollingJob set jobId on the song, the
+  // card represents a real running backend job — wiping it would leave the
+  // user with audio gen running invisibly. Skip in that case.
+  const removeTempSongForClick = useCallback((tempId: string) => {
+    setSongs(prev => prev.filter(s => {
+      if (s.id !== tempId) return true;
+      // Promoted to active job → keep
+      if (s.jobId) return true;
+      return false;
+    }));
+  }, []);
+
   // Theme State
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     const stored = localStorage.getItem('theme');
@@ -136,6 +221,10 @@ function AppContent() {
   // Video Modal
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [songForVideo, setSongForVideo] = useState<Song | null>(null);
+
+  // Cover regen modal — manual Pollinations / upload entry from SongList row
+  // and RightSidebar. Updates songs.cover_url via /api/songs/:id/regen-cover.
+  const [songForCoverRegen, setSongForCoverRegen] = useState<Song | null>(null);
 
   // Settings Modal
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -353,7 +442,9 @@ function AppContent() {
           title: s.title,
           lyrics: s.lyrics,
           style: s.style,
-          coverUrl: `https://picsum.photos/seed/${s.id}/400/400`,
+          // Prefer the real cover saved by the audio-gen pipeline (Pollinations).
+          // Fallback to a seeded picsum for legacy songs without cover_url.
+          coverUrl: s.cover_url || s.coverUrl || `https://picsum.photos/seed/${s.id}/400/400`,
           duration: s.duration && s.duration > 0 ? `${Math.floor(s.duration / 60)}:${String(Math.floor(s.duration % 60)).padStart(2, '0')}` : '0:00',
           createdAt: new Date(s.created_at || s.createdAt),
           tags: s.tags || [],
@@ -368,6 +459,7 @@ function AppContent() {
           lmBackend: s.lm_backend || s.lmBackend,
           generationTime: s.generation_time || s.generationTime,
           lrcContent: s.lrc_content || s.lrcContent,
+          openrouterModel: s.openrouter_model || s.openrouterModel,
           bpm: s.bpm || (s as any).bpm || 0,
           keyScale: s.key_scale || (s as any).keyScale || '',
           timeSignature: s.time_signature || (s as any).timeSignature || '',
@@ -695,33 +787,93 @@ function AppContent() {
     if (activeJobsRef.current.size === 0) {
       setIsGenerating(false);
     }
+    drainQueueWaiters();
   }, []);
 
-  // Cancel a single generation job (soft — stops polling, keeps card visible)
-  const cancelGeneration = useCallback(async (jobId: string) => {
+  // Cancel a single generation. The `id` may be either:
+  //  - a backend jobId (track is past pre-flight, audio gen is running) → POST /cancel
+  //  - a pre-flight tempId (still in OpenRouter LLM call, no jobId yet)  → abort the
+  //    registered AbortController, drop the placeholder card, release slot
+  //
+  // We unify both paths under one handler because the SongList row only knows
+  // `song.id` (= tempId) and `song.jobId`; a pre-flight card has tempId but
+  // no jobId, so the cancel button passes whatever it has and we figure it
+  // out here.
+  const cancelGeneration = useCallback(async (id: string) => {
     if (!token) return;
+
+    // First check: is this a pre-flight tempId? If so, abort and bail —
+    // there's no backend job yet to call /cancel on.
+    const preflightAc = preflightAbortersRef.current.get(id);
+    if (preflightAc) {
+      preflightAc.abort();
+      preflightAbortersRef.current.delete(id);
+      // Mark the placeholder as cancelled so the user can hit Reset (X)
+      // to remove it. Same pattern as the audio-cancel branch below.
+      setSongs(prev => prev.map(s =>
+        s.id === id ? { ...s, isGenerating: false, stage: 'cancelled' } : s
+      ));
+      // Release the slot the click claimed; without this the N/10 badge
+      // stays inflated.
+      decrementPendingClicks(1);
+      // Wake any other parked pre-flight in the FIFO chain so it can take
+      // its turn. The chain itself doesn't re-enter `waitForJobsToDrain`
+      // for the same click, but other queued clicks may be waiting.
+      drainQueueWaiters();
+      return;
+    }
+
+    // Otherwise treat as a backend jobId.
     try {
-      await fetch(`/api/generate/cancel/${jobId}`, {
+      await fetch(`/api/generate/cancel/${id}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
     } catch { /* ignore */ }
 
-    // Stop polling but keep the card (user can click "Reset" next)
-    const jobData = activeJobsRef.current.get(jobId);
+    // Stop polling but keep the card (user can click "Reset" next).
+    // Remove the job from activeJobsRef so waitForJobsToDrain can resolve;
+    // without this, the cancelled job sits there forever blocking every
+    // subsequent click's pre-flight from starting.
+    const jobData = activeJobsRef.current.get(id);
     if (jobData) {
       clearInterval(jobData.pollInterval);
+      activeJobsRef.current.delete(id);
+      setActiveJobCount(activeJobsRef.current.size);
+      if (activeJobsRef.current.size === 0) setIsGenerating(false);
+      drainQueueWaiters();
       // Mark song as cancelled (not generating, show reset option)
       setSongs(prev => prev.map(s =>
         s.id === jobData.tempId ? { ...s, isGenerating: false, stage: 'cancelled' } : s
       ));
     }
-  }, [token]);
+  }, [token, drainQueueWaiters, decrementPendingClicks]);
 
-  // Reset a single job — hard cancel (interrupt Gradio GPU + remove card)
-  const resetSingleJob = useCallback(async (jobId: string) => {
+  // Reset a single job — hard cancel (interrupt Gradio GPU + remove card).
+  // `id` may be either a backend jobId or a pre-flight tempId (placeholder
+  // that was already cancelled at pre-flight time and now sits with stage
+  // 'cancelled'). Pre-flight reset is just card removal — there's no GPU
+  // job to interrupt.
+  const resetSingleJob = useCallback(async (id: string) => {
     if (!token) return;
-    // Send cancel to Gradio to interrupt diffusion
+
+    const jobData = activeJobsRef.current.get(id);
+
+    // Pre-flight tempId path — no Gradio call, just drop the card.
+    if (!jobData) {
+      // Defensive: if the placeholder still has an aborter (user clicks
+      // Reset on a card that was never cancelled), abort it now.
+      const ac = preflightAbortersRef.current.get(id);
+      if (ac) {
+        ac.abort();
+        preflightAbortersRef.current.delete(id);
+      }
+      setSongs(prev => prev.filter(s => s.id !== id));
+      drainQueueWaiters();
+      return;
+    }
+
+    // Real-job path — send cancel to Gradio to interrupt diffusion
     try {
       await fetch('/api/generate/reset', {
         method: 'POST',
@@ -729,17 +881,16 @@ function AppContent() {
       });
     } catch { /* ignore */ }
 
-    // Now clean up
-    const jobData = activeJobsRef.current.get(jobId);
-    if (jobData) {
-      activeJobsRef.current.delete(jobId);
-      setSongs(prev => prev.filter(s => s.id !== jobData.tempId));
-      setActiveJobCount(activeJobsRef.current.size);
-      if (activeJobsRef.current.size === 0) {
-        setIsGenerating(false);
-      }
+    activeJobsRef.current.delete(id);
+    setSongs(prev => prev.filter(s => s.id !== jobData.tempId));
+    setActiveJobCount(activeJobsRef.current.size);
+    if (activeJobsRef.current.size === 0) {
+      setIsGenerating(false);
     }
-  }, [token]);
+    // Wake parked pre-flight clicks — without this the FIFO chain hangs
+    // forever and the next click never fires its LLM.
+    drainQueueWaiters();
+  }, [token, drainQueueWaiters]);
 
   // Cancel all generation jobs
   const cancelAllGenerations = useCallback(async () => {
@@ -751,16 +902,33 @@ function AppContent() {
       });
     } catch { /* ignore */ }
 
+    // Abort every in-flight pre-flight LLM call. Without this, an
+    // OpenRouter request that's already 15 s into its 60 s response
+    // would still complete after Cancel-all, fire `onGenerate`, and spawn
+    // a new audio job — i.e. cancel-all wouldn't actually cancel.
+    preflightAbortersRef.current.forEach(ac => ac.abort());
+    preflightAbortersRef.current.clear();
+
     // Clean up all active jobs
     activeJobsRef.current.forEach(({ tempId, pollInterval }) => {
       clearInterval(pollInterval);
     });
     const tempIds = new Set([...activeJobsRef.current.values()].map(j => j.tempId));
     activeJobsRef.current.clear();
-    setSongs(prev => prev.filter(s => !tempIds.has(s.id)));
+    // Drop both active-job placeholders AND any pre-flight cards still in
+    // the songs[] (they have isGenerating=true but no jobId yet — match by
+    // `isGenerating && !jobId` so we don't accidentally remove songs that
+    // legitimately just finished).
+    setSongs(prev => prev.filter(s => !tempIds.has(s.id) && !(s.isGenerating && !s.jobId)));
     setActiveJobCount(0);
     setIsGenerating(false);
-  }, [token]);
+    // Wake up any pre-flight clicks that were waiting for this drained queue.
+    // Without this, after cancel-all the FIFO chain stays parked forever and
+    // the next click hangs on waitForJobsToDrain → no LLM ever fires.
+    drainQueueWaiters();
+    // Reset the visual click-pending counter too — same reasoning.
+    setPendingClickCount(0);
+  }, [token, drainQueueWaiters]);
 
   // Hard reset — cancel + interrupt GPU generation
   const resetGeneration = useCallback(async () => {
@@ -772,16 +940,30 @@ function AppContent() {
       });
     } catch { /* ignore */ }
 
+    // Abort every in-flight pre-flight LLM call (same reason as in
+    // cancelAllGenerations — without this, the OR request keeps running
+    // and would spawn a new audio job after Reset-all).
+    preflightAbortersRef.current.forEach(ac => ac.abort());
+    preflightAbortersRef.current.clear();
+
     // Clean up all active jobs
     activeJobsRef.current.forEach(({ tempId, pollInterval }) => {
       clearInterval(pollInterval);
     });
     const tempIds = new Set([...activeJobsRef.current.values()].map(j => j.tempId));
     activeJobsRef.current.clear();
-    setSongs(prev => prev.filter(s => !tempIds.has(s.id)));
+    // Drop active-job placeholders AND any pre-flight cards (no jobId yet).
+    setSongs(prev => prev.filter(s => !tempIds.has(s.id) && !(s.isGenerating && !s.jobId)));
     setActiveJobCount(0);
     setIsGenerating(false);
-  }, [token]);
+    // Mirror cancelAllGenerations: wake parked pre-flight clicks and reset the
+    // visual click-pending counter. Without this, after Reset-all the FIFO
+    // chain stays parked forever and the next click hangs on
+    // waitForJobsToDrain → no LLM ever fires; the N/10 badge also gets stuck
+    // showing whatever pendingClickCount was at the moment of reset.
+    drainQueueWaiters();
+    setPendingClickCount(0);
+  }, [token, drainQueueWaiters]);
 
   // Refresh songs list (called when any job completes successfully)
   const refreshSongsList = useCallback(async () => {
@@ -793,7 +975,8 @@ function AppContent() {
         title: s.title,
         lyrics: s.lyrics,
         style: s.style,
-        coverUrl: `https://picsum.photos/seed/${s.id}/400/400`,
+        // Prefer real cover saved by Pollinations integration.
+        coverUrl: (s as any).cover_url || (s as any).coverUrl || `https://picsum.photos/seed/${s.id}/400/400`,
         duration: s.duration && s.duration > 0 ? `${Math.floor(s.duration / 60)}:${String(Math.floor(s.duration % 60)).padStart(2, '0')}` : '0:00',
         createdAt: new Date(s.created_at),
         tags: s.tags || [],
@@ -808,6 +991,7 @@ function AppContent() {
         lmBackend: s.lm_backend || s.lmBackend,
         generationTime: s.generation_time || s.generationTime,
         lrcContent: s.lrc_content || s.lrcContent,
+        openrouterModel: s.openrouter_model || s.openrouterModel,
         bpm: s.bpm || (s as any).bpm || 0,
         keyScale: s.key_scale || (s as any).keyScale || '',
         timeSignature: s.time_signature || (s as any).timeSignature || '',
@@ -912,6 +1096,14 @@ function AppContent() {
   // Handlers
   const handleGenerate = async (params: GenerationParams) => {
     if (!isAuthenticated || !token) {
+      // CreatePanel pre-allocated a placeholder card + bumped pendingClickCount
+      // before calling onGenerate. If we bail here without cleanup, the card
+      // sticks around as a ghost (no jobId, never promoted) and the N/10 badge
+      // stays inflated by 1 until reload.
+      if (params._tempId) {
+        setSongs(prev => prev.filter(s => s.id !== params._tempId));
+      }
+      decrementPendingClicks(1);
       setShowUsernameModal(true);
       return;
     }
@@ -920,31 +1112,49 @@ function AppContent() {
     setCurrentView('create');
     setMobileShowList(false);
 
-    // Create unique temp ID for this job
-    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const tempSong: Song = {
-      id: tempId,
-      title: params.title || t('generating') || 'Generating...',
-      lyrics: '',
-      style: params.style,
-      coverUrl: 'https://picsum.photos/200/200?blur=10',
-      duration: '--:--',
-      createdAt: new Date(),
-      isGenerating: true,
-      tags: params.customMode ? ['custom'] : ['simple'],
-      isPublic: true
-    };
-
-    setSongs(prev => [tempSong, ...prev]);
-    setSelectedSong(tempSong);
-    setShowRightSidebar(true);
+    // If CreatePanel already created an instant placeholder card via
+    // createTempSongForClick (so the user sees something AT click time, not
+    // after the 20s LLM pre-flight), reuse that card. Otherwise create one
+    // here as before.
+    const preCreatedId = params._tempId;
+    const tempId = preCreatedId || `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    if (preCreatedId) {
+      // Promote the placeholder with whatever metadata the pre-flight produced.
+      setSongs(prev => prev.map(s => s.id === tempId ? {
+        ...s,
+        title: params.title || s.title,
+        style: params.style || s.style,
+        tags: params.customMode ? ['custom'] : ['simple'],
+        stage: 'stageStartingTrack',
+      } : s));
+      setSelectedSong(prev => prev?.id === tempId ? { ...prev, title: params.title || prev.title, style: params.style || prev.style } : prev);
+    } else {
+      const tempSong: Song = {
+        id: tempId,
+        title: params.title || t('generating') || 'Generating...',
+        lyrics: '',
+        style: params.style,
+        coverUrl: 'https://picsum.photos/200/200?blur=10',
+        duration: '--:--',
+        createdAt: new Date(),
+        isGenerating: true,
+        tags: params.customMode ? ['custom'] : ['simple'],
+        isPublic: true
+      };
+      setSongs(prev => [tempSong, ...prev]);
+      setSelectedSong(tempSong);
+      setShowRightSidebar(true);
+    }
 
     try {
       // Simple mode: LLM generates caption + lyrics + metadata from description
       let enrichedParams = { ...params };
       if (!params.customMode && params.songDescription && token) {
         try {
-          setSongs(prev => prev.map(s => s.id === tempId ? { ...s, stage: t('writingLyricsAndStyle') || 'Writing lyrics & style...' } : s));
+          // Use the i18n KEY here (SongList does t(song.stage)) so the label
+          // tracks language switches mid-generation. Storing the resolved
+          // string would freeze the label in the locale active at click time.
+          setSongs(prev => prev.map(s => s.id === tempId ? { ...s, stage: 'writingLyricsAndStyle' } : s));
           const sample = await generateApi.createSample({
             query: params.songDescription,
             instrumental: params.instrumental,
@@ -968,11 +1178,13 @@ function AppContent() {
             setSongs(prev => prev.map(s => s.id === tempId ? { ...s, title: String(sample.caption || '').slice(0, 50) || s.title, style: String(sample.caption || '') } : s));
           }
         } catch (err) {
-          // create_sample failed — block generation, remove temp song
+          // create_sample failed — block generation, remove temp song.
+          // Release the pending-click slot so the N/10 badge doesn't stick.
           console.error('[Simple] create_sample failed:', err);
           setSongs(prev => prev.filter(s => s.id !== tempId));
           showToast('LLM not available — model may be loading or Gradio restarting. Wait and try again.', 'error');
           setIsGenerating(false);
+          decrementPendingClicks(1);
           return;
         }
       }
@@ -1049,16 +1261,46 @@ function AppContent() {
         repaintMode: params.repaintMode,
         repaintStrength: params.repaintStrength,
         ditModel: params.ditModel,
+        // Fields the CreatePanel customPayload IIFE builds — must be mirrored
+        // explicitly here because `generateApi.startGeneration` whitelists the
+        // payload and any field not listed is silently dropped.
+        prompt: params.prompt,
+        dcwEnabled: params.dcwEnabled,
+        dcwMode: params.dcwMode,
+        dcwScaler: params.dcwScaler,
+        dcwHighScaler: params.dcwHighScaler,
+        dcwWavelet: params.dcwWavelet,
+        retakeSeed: params.retakeSeed,
+        retakeVariance: params.retakeVariance,
+        flowEditMorph: params.flowEditMorph,
+        flowEditSourceCaption: params.flowEditSourceCaption,
+        flowEditSourceLyrics: params.flowEditSourceLyrics,
+        flowEditNMin: params.flowEditNMin,
+        flowEditNMax: params.flowEditNMax,
+        flowEditNAvg: params.flowEditNAvg,
+        loraLoaded: params.loraLoaded,
+        // OpenRouter — model id used for the AI lyric/caption run (persisted on song row).
+        openrouterModel: params.openrouterModel,
+        // Pollinations.ai cover-gen config — opaque blob mirrored to backend.
+        pollinations: params.pollinations,
+        // Pre-created placeholder card id (instant feedback at click time).
+        _tempId: params._tempId,
       }, token);
 
       // Store jobId on the temp song so cancel button works
       setSongs(prev => prev.map(s => s.id === tempId ? { ...s, jobId: job.jobId } : s));
 
       beginPollingJob(job.jobId, tempId);
+      // Hand off the click counter to the active counter — keeps the UI badge
+      // continuous instead of blinking 1→0→1 between pre-flight and polling.
+      decrementPendingClicks(1);
 
     } catch (e) {
       console.error('Generation error:', e);
       setSongs(prev => prev.filter(s => s.id !== tempId));
+      // Failure path: release the pending click slot so the badge accurately
+      // reflects "nothing in flight" instead of being stuck.
+      decrementPendingClicks(1);
 
       // Only set isGenerating to false if no other jobs are running
       if (activeJobsRef.current.size === 0) {
@@ -1409,6 +1651,21 @@ function AppContent() {
     setIsVideoModalOpen(true);
   };
 
+  const openCoverRegen = (song: Song) => {
+    // Don't pause playback here — cover regen is non-destructive and the
+    // modal is small enough that the user may want to keep listening.
+    setSongForCoverRegen(song);
+  };
+
+  // Apply the new cover URL to local state without a full /api/songs reload
+  // (the backend already wrote songs.cover_url; we just need the UI to
+  // reflect it). Cache-bust by appending a timestamp so <img> re-fetches.
+  const applyCoverUpdate = useCallback((songId: string, coverUrl: string) => {
+    const bust = `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+    setSongs(prev => prev.map(s => s.id === songId ? { ...s, coverUrl: bust } : s));
+    setSelectedSong(prev => prev?.id === songId ? { ...prev, coverUrl: bust } : prev);
+  }, []);
+
   // Handle username setup
   const handleUsernameSubmit = async (username: string) => {
     await setupUser(username);
@@ -1523,11 +1780,19 @@ function AppContent() {
               <CreatePanel
                 onGenerate={handleGenerate}
                 isGenerating={isGenerating}
-                activeJobCount={activeJobCount}
+                activeJobCount={activeJobCount + pendingClickCount}
                 initialData={reuseData}
                 createdSongs={songs}
                 pendingAudioSelection={pendingAudioSelection}
                 onAudioSelectionApplied={() => setPendingAudioSelection(null)}
+                waitForJobsToDrain={waitForJobsToDrain}
+                incrementPendingClicks={incrementPendingClicks}
+                decrementPendingClicks={decrementPendingClicks}
+                createTempSongForClick={createTempSongForClick}
+                updateTempSongForClick={updateTempSongForClick}
+                removeTempSongForClick={removeTempSongForClick}
+                registerPreflightAbort={registerPreflightAbort}
+                unregisterPreflightAbort={unregisterPreflightAbort}
               />
             </div>
             {leftPanel.handle}
@@ -1552,6 +1817,7 @@ function AppContent() {
                 onToggleLike={toggleLike}
                 onAddToPlaylist={openAddToPlaylistModal}
                 onOpenVideo={openVideoGenerator}
+                onOpenCoverRegen={openCoverRegen}
                 onShowDetails={handleShowDetails}
                 onNavigateToProfile={handleNavigateToProfile}
                 onReusePrompt={handleReuse}
@@ -1582,6 +1848,7 @@ function AppContent() {
                   song={selectedSong}
                   onClose={() => setShowRightSidebar(false)}
                   onOpenVideo={() => selectedSong && openVideoGenerator(selectedSong)}
+                  onOpenCoverRegen={() => selectedSong && openCoverRegen(selectedSong)}
                   onReuse={handleReuse}
                   onSongUpdate={handleSongUpdate}
                   onNavigateToProfile={handleNavigateToProfile}
@@ -1707,6 +1974,17 @@ function AppContent() {
         onClose={() => setIsVideoModalOpen(false)}
         song={songForVideo}
       />
+      {/* Cover regen modal — only mounted while a song is selected for regen.
+          Unmounting on close revokes blob URLs (see CoverRegenModal cleanup
+          effect) so generated previews don't leak across modal opens. */}
+      {songForCoverRegen && token && (
+        <CoverRegenModal
+          song={songForCoverRegen}
+          token={token}
+          onClose={() => setSongForCoverRegen(null)}
+          onCoverSaved={applyCoverUpdate}
+        />
+      )}
       <UsernameModal
         isOpen={showUsernameModal}
         onSubmit={handleUsernameSubmit}
@@ -1731,6 +2009,7 @@ function AppContent() {
               song={selectedSong}
               onClose={() => setShowMobileDetails(false)}
               onOpenVideo={() => selectedSong && openVideoGenerator(selectedSong)}
+              onOpenCoverRegen={() => selectedSong && openCoverRegen(selectedSong)}
               onReuse={handleReuse}
               onSongUpdate={handleSongUpdate}
               onNavigateToProfile={handleNavigateToProfile}

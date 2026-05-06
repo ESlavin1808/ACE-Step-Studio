@@ -3,8 +3,9 @@ chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo   ACE-Step Studio (NO LM mode)
+echo   ACE-Step Studio (External LLM mode — local LM disabled)
 echo ========================================
+echo   Configure OpenRouter API key in app settings to enable AI lyric / prompt generation.
 
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
