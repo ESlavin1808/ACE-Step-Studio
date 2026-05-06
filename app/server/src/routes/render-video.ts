@@ -11,13 +11,29 @@ const __dirname = path.dirname(__filename);
 const TMP_BASE = path.join(__dirname, '../../tmp');
 
 function findFfmpeg(): string {
-  const portable = path.resolve(__dirname, '../../../../ffmpeg/ffmpeg.exe');
-  if (existsSync(portable)) return portable;
+  // 1. Explicit override — used by the Pinokio launcher (start.js passes
+  //    FFMPEG_PATH pointing at the ffmpeg binary it downloaded into the
+  //    launcher's own folder layout). Highest priority because Pinokio's
+  //    cwd doesn't sit at the same depth as portable run.bat.
+  const envPath = process.env.FFMPEG_PATH;
+  if (envPath && existsSync(envPath)) return envPath;
+
+  // 2. Portable layout (run.bat path): <projectRoot>/ffmpeg/ffmpeg.exe.
+  //    install.bat downloads ffmpeg here on first install.
+  const portableExe = path.resolve(__dirname, '../../../../ffmpeg/ffmpeg.exe');
+  if (existsSync(portableExe)) return portableExe;
+  // Same layout but Linux/Mac (no .exe).
+  const portableBin = path.resolve(__dirname, '../../../../ffmpeg/ffmpeg');
+  if (existsSync(portableBin)) return portableBin;
+
+  // 3. System PATH — for users who installed ffmpeg via brew/apt/scoop.
   try {
     execSync('ffmpeg -version', { stdio: 'ignore' });
     return 'ffmpeg';
   } catch {
-    throw new Error('ffmpeg not found');
+    throw new Error(
+      'ffmpeg not found. Set FFMPEG_PATH env var, or place ffmpeg in <projectRoot>/ffmpeg/, or install it system-wide.'
+    );
   }
 }
 
